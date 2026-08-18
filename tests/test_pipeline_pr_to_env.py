@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,6 +25,7 @@ from repo2rlenv.pipelines.pr_to_env import (
     UrlParseError,
     _leak_grep_v2,
     _pyproject_sanitize_snippet,
+    classify_validation,
     parse_pr_url,
     read_urls_file,
 )
@@ -237,3 +239,26 @@ def test_instruction_uses_synthesis_when_enabled():
         text = inst._instruction_for(_fake_pr(), "o", "n", github)
     assert "**Title:** X" in text
     assert inst._llm_cost_usd == 0.02
+
+
+def test_classify_apply_failed():
+    o = SimpleNamespace(status="failed", reason="test_patch failed to apply at base_commit",
+                        fail_to_pass=[], pass_to_pass=[])
+    assert classify_validation(o) == "apply_failed"
+
+
+def test_classify_no_fail_to_pass():
+    o = SimpleNamespace(status="failed", reason="no fail-to-pass tests after validation",
+                        fail_to_pass=[], pass_to_pass=["a"])
+    assert classify_validation(o) == "no_fail_to_pass"
+
+
+def test_classify_bootstrap_failed():
+    o = SimpleNamespace(status="failed", reason="bootstrap did not record any test_cmds",
+                        fail_to_pass=[], pass_to_pass=[])
+    assert classify_validation(o) == "bootstrap_failed"
+
+
+def test_classify_ok_returns_none():
+    o = SimpleNamespace(status="verified", reason="", fail_to_pass=["a"], pass_to_pass=["b"])
+    assert classify_validation(o) is None

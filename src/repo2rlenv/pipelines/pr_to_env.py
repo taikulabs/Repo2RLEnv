@@ -210,6 +210,20 @@ PY
 """
 
 
+def classify_validation(outcome) -> str | None:
+    """Map a ValidationOutcome to an RFC skip reason, or None if usable."""
+    if outcome.status == "verified":
+        return None
+    reason = (outcome.reason or "").lower()
+    if "apply" in reason:
+        return "apply_failed"
+    if "no fail-to-pass" in reason:
+        return "no_fail_to_pass"
+    if "test_cmds" in reason or "fetch" in reason or "base_commit" in reason:
+        return "bootstrap_failed"
+    return outcome.status or "validation_failed"
+
+
 # ----------------------------------------------------------------------------
 # Pipeline
 # ----------------------------------------------------------------------------
@@ -408,6 +422,13 @@ class PrToEnvPipeline:
                         language=self.bootstrap.language.value,
                         timeout=self.options.validation_timeout_sec,
                     )
+                    v_reason = classify_validation(outcome)
+                    if v_reason is not None:
+                        skip_reasons[v_reason] = skip_reasons.get(v_reason, 0) + 1
+                        self._emit_progress(pr_label, "skip", f"{v_reason}: {outcome.reason}")
+                        if self.options.strict:
+                            raise ValueError(f"URL {url!r}: {v_reason} ({outcome.reason})")
+                        continue
                     fail_to_pass = outcome.fail_to_pass
                     pass_to_pass = outcome.pass_to_pass
                     validation_status = outcome.status
