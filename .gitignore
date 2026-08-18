@@ -241,3 +241,6 @@ site/
 
 # Local helper scripts (not for distribution)
 scripts/
+
+# git worktrees
+.worktrees/
