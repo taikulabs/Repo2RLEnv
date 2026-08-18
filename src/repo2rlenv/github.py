@@ -80,6 +80,40 @@ def _fetch_base_sha(owner: str, name: str, number: int, *, token: str | None = N
     return sha
 
 
+def fetch_pr(owner: str, name: str, number: int, *, token: str | None = None) -> PullRequestSummary:
+    """Fetch a single PR's metadata as a PullRequestSummary.
+
+    The import-shape sibling of list_merged_prs' per-row build: one PR by
+    number, no history walk. Raises GitHubError if the PR is missing or has
+    no resolvable base SHA (a rebased/deleted base makes it unbuildable).
+    """
+    raw = _run_gh(
+        [
+            "pr", "view", str(number), "--repo", f"{owner}/{name}",
+            "--json", "number,title,body,state,mergedAt,baseRefName,headRefOid,isDraft,url,files",
+        ],
+        token=token,
+    )
+    r = json.loads(raw)
+    base_sha = _fetch_base_sha(owner, name, number, token=token)
+    if base_sha is None:
+        raise GitHubError(f"PR #{number}: could not resolve base_sha (rebased or base deleted?)")
+    files = [f["path"] for f in (r.get("files") or [])]
+    return PullRequestSummary(
+        number=r["number"],
+        title=r.get("title") or "",
+        body=r.get("body") or "",
+        state=r.get("state") or "",
+        merged_at=r.get("mergedAt"),
+        base_ref=r.get("baseRefName") or "",
+        base_sha=base_sha,
+        head_sha=r.get("headRefOid") or "",
+        is_draft=bool(r.get("isDraft")),
+        url=r.get("url") or f"https://github.com/{owner}/{name}/pull/{number}",
+        changed_files=files,
+    )
+
+
 def list_merged_prs(
     owner: str,
     name: str,

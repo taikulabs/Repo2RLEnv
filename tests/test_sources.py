@@ -171,3 +171,64 @@ def test_local_repo_clones(tmp_path):
     dest = tmp_path / "clone"
     _shallow_clone_at_ref(repo.url, "main", token, dest)
     assert (dest / "hello.py").read_text() == "x = 1\n"
+
+
+# ---------------------------------------------------------------------------
+# fetch_pr — single-PR/MR metadata (pr_to_env)
+# ---------------------------------------------------------------------------
+
+from unittest.mock import patch
+
+from repo2rlenv import github, gitlab
+
+
+def test_github_fetch_pr_builds_summary():
+    row = {
+        "number": 3434,
+        "title": "Fix parser crash on empty input",
+        "body": "Closes #3400",
+        "state": "MERGED",
+        "mergedAt": "2026-01-02T03:04:05Z",
+        "baseRefName": "main",
+        "headRefOid": "deadbeefcafe",
+        "isDraft": False,
+        "url": "https://github.com/pallets/click/pull/3434",
+        "files": [{"path": "src/click/parser.py"}, {"path": "tests/test_parser.py"}],
+    }
+    import json as _json
+    with patch.object(github, "_run_gh", return_value=_json.dumps(row)), \
+         patch.object(github, "_fetch_base_sha", return_value="a" * 40):
+        pr = github.fetch_pr("pallets", "click", 3434)
+    assert pr.number == 3434
+    assert pr.base_sha == "a" * 40
+    assert pr.url.endswith("/pull/3434")
+    assert pr.changed_files == ["src/click/parser.py", "tests/test_parser.py"]
+
+
+def test_github_fetch_pr_raises_without_base_sha():
+    import json as _json
+    row = {"number": 1, "title": "x", "body": "", "state": "MERGED",
+           "mergedAt": None, "baseRefName": "main", "headRefOid": "abc",
+           "isDraft": False, "url": "u", "files": []}
+    with patch.object(github, "_run_gh", return_value=_json.dumps(row)), \
+         patch.object(github, "_fetch_base_sha", return_value=None):
+        with pytest.raises(github.GitHubError):
+            github.fetch_pr("o", "n", 1)
+
+
+def test_gitlab_fetch_pr_builds_summary():
+    mr = {"iid": 42, "title": "Fix crash", "description": "desc",
+          "merged_at": "2026-01-02T00:00:00Z", "target_branch": "main",
+          "draft": False, "web_url": "https://gitlab.com/foo/bar/-/merge_requests/42",
+          "sha": "headsha"}
+    changes = {"diff_refs": {"base_sha": "b" * 40, "head_sha": "headsha"},
+               "changes": [{"new_path": "lib/x.py"}]}
+
+    def fake_request(url, token, accept_json=True):
+        return changes if url.endswith("/changes") else mr
+
+    with patch.object(gitlab, "_request", side_effect=fake_request):
+        pr = gitlab.fetch_pr("foo", "bar", 42)
+    assert pr.number == 42
+    assert pr.base_sha == "b" * 40
+    assert pr.changed_files == ["lib/x.py"]
