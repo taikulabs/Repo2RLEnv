@@ -135,11 +135,20 @@ failed URL comes back with a distinct reason in `PipelineResult.skip_reasons`
 
 | Skip reason | Meaning |
 |---|---|
-| `no_test_patch` | the PR doesn't add / modify any test file — nothing to verify |
-| `bootstrap_failed` | the repo doesn't build (or its suite doesn't collect) in a slim container |
+| `pr_fetch_failed` | PR metadata fetch failed (network / auth / not found) |
+| `non_bug_pr` | the PR isn't a bug fix (revert, cherry-pick, release chore, …) — filtered by title |
+| `diff_fetch_failed` | the PR diff fetch failed |
+| `empty_source_patch` | no source changes remain after splitting source vs. test hunks |
+| `no_test_patch` | the PR adds no test files — no F2P signal, nothing to verify |
+| `no_new_test_funcs` | `require_new_test_funcs=True` but the test_patch modifies existing tests only (no `+def test_` hunks) |
+| `apply_failed` | the test patch doesn't apply cleanly at `base_commit` (a rebased/squashed PR can hit this) — from `classify_validation` |
 | `no_fail_to_pass` | validation ran but no test flipped fail→pass with the fix applied |
-| `apply_failed` | the merged diff doesn't apply cleanly at `base_commit` (a rebased/squashed PR can hit this) |
-| `network_error` | the URL fetch failed |
+| `bootstrap_failed` | bootstrap / checkout / `test_cmds` setup failed in the container |
+| `f2p_below_floor` | FAIL_TO_PASS count is below `min_f2p` (only drops the env when `hard_drop_low_signal=True`) |
+| `oracle_below_1` | `oracle_gate=True` and the gold patch scored `reward != 1.0`, so the emitted env was dropped |
+
+> The RFC's abstract `network_error` maps to the concrete `pr_fetch_failed` /
+> `diff_fetch_failed` keys the shipped pipeline emits.
 
 ## Yield
 
