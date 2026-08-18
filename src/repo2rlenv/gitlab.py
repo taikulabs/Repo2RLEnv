@@ -123,6 +123,31 @@ def fetch_pr_diff(owner: str, name: str, number: int, *, token: str | None = Non
     return _request(url, token, accept_json=False)
 
 
+def fetch_pr(owner: str, name: str, number: int, *, token: str | None = None) -> PullRequestSummary:
+    """Fetch a single merged MR as a PullRequestSummary (github.fetch_pr parity)."""
+    pid = _project_id(owner, name)
+    r = _request(f"{GITLAB_API}/projects/{pid}/merge_requests/{number}", token)
+    changes = _request(f"{GITLAB_API}/projects/{pid}/merge_requests/{number}/changes", token)
+    refs = changes.get("diff_refs") or {}
+    files = [c["new_path"] for c in changes.get("changes", []) if c.get("new_path")]
+    base_sha = refs.get("base_sha") or ""
+    if not base_sha:
+        raise GitLabError(f"MR !{number}: could not resolve base_sha")
+    return PullRequestSummary(
+        number=r.get("iid", number),
+        title=r.get("title") or "",
+        body=r.get("description") or "",
+        state="merged",
+        merged_at=r.get("merged_at"),
+        base_ref=r.get("target_branch") or "",
+        base_sha=base_sha,
+        head_sha=refs.get("head_sha") or r.get("sha") or "",
+        is_draft=bool(r.get("draft")),
+        url=r.get("web_url") or f"{GITLAB_HOST}/{owner}/{name}/-/merge_requests/{number}",
+        changed_files=files,
+    )
+
+
 def fetch_issue(
     owner: str, name: str, number: int, *, token: str | None = None
 ) -> tuple[str, str] | None:
