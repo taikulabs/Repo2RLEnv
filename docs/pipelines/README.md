@@ -19,7 +19,7 @@ flowchart LR
 
 ## Pipelines
 
-All 6 pipelines are shipped — 3 stable (`pr_diff`, `pr_runtime`, `commit_runtime`), 3 experimental. See per-pipeline pages for the recipe + options + Harbor verification status.
+All 7 pipelines are shipped — 3 stable (`pr_diff`, `pr_runtime`, `commit_runtime`), 4 experimental. See per-pipeline pages for the recipe + options + Harbor verification status.
 
 | Pipeline | What it produces | Source | Sandbox | LLM use | GPU helpful? | Reference dataset | Inspiration |
 |---|---|:-:|:-:|---|:-:|---|---|
@@ -29,6 +29,7 @@ All 6 pipelines are shipped — 3 stable (`pr_diff`, `pr_runtime`, `commit_runti
 | [`code_instruct`](./code_instruct.md) | LLM-authored problem + executable verifier anchored to real source | GitHub · GitLab · local | ✅ | at synthesis (problem + verifier) | Sometimes | [`repo2rlenv-code-instruct`](https://huggingface.co/datasets/AdithyaSK/repo2rlenv-code-instruct) — 100 tasks × 5 Python repos | [Magicoder](https://github.com/ise-uiuc/magicoder) |
 | [`equivalence_tests`](./equivalence_tests.md) | Extract a function; LLM writes equivalence tests vs `reference_<name>` | GitHub · GitLab · local | ✅ | at synthesis (tests, feedback-driven retry) | If function uses GPU | *pending v0.8.8* | [R2E](https://github.com/r2e-project/r2e) |
 | [`cve_patches`](./cve_patches.md) | OSV CVE → fix commit → Harbor task (reuses `pr_runtime` verifier) | GitHub | ✅ | at bootstrap (cached) | Rarely | [`AdithyaSK/repo2rlenv-cve-patches`](https://huggingface.co/datasets/AdithyaSK/repo2rlenv-cve-patches) (19) | [PatchSeeker](https://github.com/hungkien05/PatchSeeker) / CVE-Bench |
+| [`pr_to_env`](./pr_to_env.md) | Import a specific PR URL (or curated list) → one sandbox-verified env per PR (reuses `pr_runtime` verifier) | GitHub · GitLab | ✅ | at bootstrap (cached) + at synthesis | ML repos | — | [SWE-bench](https://github.com/SWE-bench/SWE-bench) |
 
 - **Source** — where `--repo` can point. `GitHub · GitLab · local` = a GitHub `owner/name`, a `gitlab.com` URL, or a local path (`/abs`, `./rel`, `~`, `file://`); these need only git + source files. `GitHub · GitLab` = PR/MR-mining pipelines (github.com or gitlab.com, not a bare local clone). `GitHub` = needs the GitHub commit API + OSV CVE data (`cve_patches`). `generate` blocks an unsupported source up front with a clear error.
 - **Sandbox** ✅ = needs Docker + the bootstrap-built env. `thin¹` = needs Docker but ships a lightweight `python:3.12-slim` env baked at generation time (no bootstrap LLM agent, ~30 s build). `—` = pure text, no execution.
@@ -53,6 +54,7 @@ yield band below.
 | `code_instruct` | **60–90%** (v0.8.6 gates + retries; empirically 75.8% across 5 Python libs on the reference dataset) | fraction of seed snippets where the LLM's test passes all quality gates AND fails-without / passes-with the oracle | `max_attempts_per_seed` (default 3), LLM quality, `seed_min/max_loc` |
 | `equivalence_tests` | **~50% of pure candidates** (v0.8.7 gates + retries; the purity filter is the real gate — framework-heavy repos yield 0–2 pure candidates, utility-heavy repos yield 10s) | fraction of extracted pure functions where the LLM writes a test that fails-with-stub / passes-with-oracle | `max_attempts_per_function` (default 3), `min/max_loc`, LLM quality, repo shape (utility vs framework) |
 | `cve_patches` | **5–25%** | does the CVE fix have a verifiable test (shipped *or* agent-synthesized) **and** does the repo's suite collect in a slim container? | `synthesize_poc_test`, `poc_agent`, `require_fail_to_pass`, `min_severity` |
+| `pr_to_env` | **per-URL ~85–95%** (import-shape: you chose the URLs, so there's no candidate/emitted denominator — a failed URL returns a specific reason, not a dropped ratio entry) | is the PR well-chosen — has runnable tests and a repo that bootstraps clean? | `strict`, `require_new_test_funcs`, `synthesize_with_llm`, `oracle_gate` |
 
 **The single biggest lever for every execution-gated pipeline (`*_runtime`,
 `cve_patches`, the synthesis pipelines) is repo health** — if the suite doesn't
@@ -170,6 +172,7 @@ For the full design rationale + dataset card layout + pilot evidence, see [`pr_d
 | `code_instruct` | optional | ✅ |
 | `equivalence_tests` | — | ✅ |
 | `cve_patches` | ✅ | ✅ |
+| `pr_to_env` | ✅ | ✅ |
 
 `diff_similarity` works without a sandbox; `test_execution` requires one.
 
