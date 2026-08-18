@@ -540,9 +540,9 @@ class PrToEnvPipeline:
             finally:
                 if sandbox is not None:
                     try:
-                        sandbox.stop()
+                        sandbox.cleanup()
                     except Exception:
-                        logger.debug("sandbox stop failed", exc_info=True)
+                        logger.debug("sandbox cleanup failed", exc_info=True)
 
         return PipelineResult(
             candidates=candidates,
@@ -614,15 +614,23 @@ class PrToEnvPipeline:
             fp.write(json.dumps(entry) + "\n")
 
     def _start_validation_sandbox(self):
-        """Create a sandbox container from the bootstrap image."""
+        """Spin up a DockerSandbox from the bootstrap image (shared across PRs).
+
+        Mirrors ``pr_runtime._start_validation_sandbox``: the bootstrap image
+        already contains the repo, so ``repo_dir`` is a throwaway marker dir and
+        each PR's base commit is checked out inside the container by validate_pr.
+        """
+        import tempfile
+
         from repo2rlenv.bootstrap.docker import DockerSandbox
 
-        sandbox = DockerSandbox(
-            image=self.bootstrap.image_digest or self.bootstrap.image_tag,
-            language=self.bootstrap.language,
+        marker = Path(tempfile.mkdtemp(prefix="r2e-pr-to-env-"))
+        (marker / ".keep").write_text("")  # docker cp <src>/. <dst> needs a non-empty dir
+        return DockerSandbox.start(
+            base_image=self.bootstrap.image_tag,
+            repo_dir=marker,
+            platform=self.input.bootstrap.platform,
         )
-        sandbox.start()
-        return sandbox
 
     def _instruction_for(self, pr, owner: str, name: str, provider) -> str:
         """Leak-free problem statement. LLM synthesis when enabled+available,
@@ -650,7 +658,7 @@ class PrToEnvPipeline:
                     f"# Issue\n\n{body}\n\n## Task\n\n"
                     "Modify the repository so that the issue described above is resolved. "
                     "The task's test suite verifies your patch by applying it on top of "
-                    f"the base commit `{pr.base_sha[:12]}` and running the modified tests."
+                    "the base commit and running the modified tests. "
                     "Do not attempt to cheat by looking up existing solutions to this PR, including searching the web, querying GitHub, attempting to fetch newer commits, inspecting release artifacts, or otherwise looking up the existing PR solution on the internet. Work only from the local repository checkout and the issue description above."
                 )
         if text is None:
@@ -694,7 +702,11 @@ class PrToEnvPipeline:
         # The v2 guard installs iptables in the image + a default-deny OUTPUT
         # policy inside the container. Closes the raw.githubusercontent.com
         # leak that opus/codex exploited on HF_ML_Bench_v0.
-        image_ref = self.bootstrap.image_digest or self.bootstrap.image_tag
+        image_ref = (
+            self.bootstrap.image_digest
+            if self.bootstrap.pushed_to_registry
+            else self.bootstrap.image_tag
+        )
         env_dockerfile = (
             build_environment_dockerfile(
                 bootstrap_image=image_ref,
@@ -757,7 +769,6 @@ class PrToEnvPipeline:
                 "reward_kinds": ["test_execution", "diff_similarity"],
                 "pr_to_env": {
                     "pr_url": pr.url,
-                    "source_url": pr.url,
                     "pr_merged_at": pr.merged_at,
                     "base_commit": pr.base_sha,
                     "fail_to_pass": fail_to_pass,

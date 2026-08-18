@@ -322,6 +322,7 @@ def test_run_emits_one_task(tmp_path: Path):
     inst.input.repo.ref = "main"
     inst.input.repo.auth_token_env = None
     inst.input.llm = None
+    inst.input.bootstrap.platform = "linux/amd64"
     inst.options = MagicMock(
         url="https://github.com/o/n/pull/7",
         urls_file=None,
@@ -377,15 +378,21 @@ def test_run_emits_one_task(tmp_path: Path):
         status="verified", reason="", fail_to_pass=["test_a"], pass_to_pass=["test_b"],
     )
     write_harbor_task = MagicMock()
+    sandbox = MagicMock()
 
     with patch("repo2rlenv.pipelines.pr_to_env.provider_for", return_value=provider), \
          patch("repo2rlenv.pipelines.pr_to_env.resolve_repo_token", return_value=None), \
          patch("repo2rlenv.pipelines.pr_to_env.ensure_bootstrap", return_value=boot), \
          patch("repo2rlenv.pipelines.pr_to_env.write_harbor_task", write_harbor_task), \
-         patch.object(PrToEnvPipeline, "_start_validation_sandbox", return_value=MagicMock()), \
+         patch("repo2rlenv.bootstrap.docker.DockerSandbox.start", return_value=sandbox) as start, \
          patch("repo2rlenv.pipelines.pr_runtime_validate.validate_pr", return_value=outcome):
         result = inst.run(tmp_path)
 
     assert result.emitted == 1
     assert result.candidates == 1
     assert write_harbor_task.called
+    # Sandbox seam: DockerSandbox.start driven once from the bootstrap image tag,
+    # and the resulting sandbox torn down via cleanup() in run()'s finally block.
+    assert start.call_count == 1
+    assert start.call_args.kwargs["base_image"] == inst.bootstrap.image_tag
+    assert sandbox.cleanup.called

@@ -146,6 +146,7 @@ failed URL comes back with a distinct reason in `PipelineResult.skip_reasons`
 | `bootstrap_failed` | bootstrap / checkout / `test_cmds` setup failed in the container |
 | `f2p_below_floor` | FAIL_TO_PASS count is below `min_f2p` (only drops the env when `hard_drop_low_signal=True`) |
 | `oracle_below_1` | `oracle_gate=True` and the gold patch scored `reward != 1.0`, so the emitted env was dropped |
+| `validation_failed` | catch-all from `classify_validation` for any validation failure that doesn't match a more specific reason above |
 
 > The RFC's abstract `network_error` maps to the concrete `pr_fetch_failed` /
 > `diff_fetch_failed` keys the shipped pipeline emits.
