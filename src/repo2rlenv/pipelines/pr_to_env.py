@@ -461,16 +461,6 @@ class PrToEnvPipeline:
                 slug = f"{owner}__{name}-{pr_number}"
                 write_harbor_task(task, out_dir / slug)
 
-                # Oracle-gate (M3 gate #14) — currently deferred to a post-emit
-                # script. Full integration lands in M3.
-                if self.options.oracle_gate:
-                    logger.warning(
-                        "oracle-gate not yet integrated in-pipeline; run "
-                        "`plans/scripts/harbor_eval_env.sh %s` post-emit and "
-                        "drop the env if reward != 1.0.",
-                        slug,
-                    )
-
                 # Oracle-gate (M3 gate #14) — run `harbor run -a oracle` and drop
                 # the env unless reward == 1.0. Skip if user disabled it or the
                 # harbor CLI isn't reachable (soft-warn only).
