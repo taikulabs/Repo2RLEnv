@@ -275,12 +275,6 @@ class PrToEnvOptions(_BaseOptions):
     # and emits whatever succeeded.
     strict: bool = False
 
-    # Cross-repo dep pinning (M3 gate): if True, synthesize a
-    # environment/constraints.txt from `pip index versions` at the PR's merge
-    # commit date and inject `pip install -c constraints.txt` into the Dockerfile.
-    # Rescues cross-repo API skew (e.g. peft PR needing transformers==5.4.*).
-    pin_transitive_deps: bool = True
-
     # F2P / P2P count floors (M3 gate #10). Below these the env is flagged
     # `calibration = "low_signal"` and — if hard=True — hard-dropped.
     min_f2p: int = 3

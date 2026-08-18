@@ -9,23 +9,17 @@ Same task shape as `pr_runtime`, same graded F2P/P2P verifier, same
 anti-contamination guards. The reused machinery is imported verbatim
 from `pr_runtime.py` — no fork.
 
-**HF_ML_Bench_v0 pipeline gates** (M3 layer, currently skeleton):
-  1. Network-level egress firewall — replaces docker-compose extra_hosts
-     (currently still uses egress_guard_compose; M2 swaps this)
-  2. Bootstrap smoke — validated at bootstrap time
-  3. F2P collect-only match — parametrization suffix expansion
-  4. Reset decision table — git checkout vs rm -f based on base_commit content
-  5. pyproject.toml sanitize — strip [tool.pytest] if [tool.pytest.ini_options]
-  6. Cross-repo dep pinning — constraints.txt from merge-date `pip index versions`
-  7. Salvage manifest — flags follow-up-commit collateral outside tests/
-  8. F2P/P2P count floors — calibration = "low_signal" below min
-  9. LF-normalized content_hash
- 10. Instruction leak grep v2 — file basenames + dirs + SHA-8+ hex
- 11. pytest.raises(match=...) flagged in DECISIONS.md
- 12. Oracle-gate — reward=1.0 required or drop
+**Anti-contamination / calibration gates** (experimental):
+  - pyproject.toml sanitize — strip a bare ``[tool.pytest]`` table when
+    ``[tool.pytest.ini_options]`` is also present.
+  - F2P/P2P count floors — flag ``calibration = "low_signal"`` (and, when
+    ``hard_drop_low_signal``, drop) envs below ``min_f2p`` / ``min_p2p``.
+  - Instruction leak-grep v2 — strip short-SHA hex and pytest node-ids,
+    soft-flag source/test basenames and dirnames.
+  - Oracle-gate — run ``harbor run -a oracle`` and drop the env unless the
+    oracle earns ``reward == 1.0``.
 
-Status: **experimental**. This is the first import-shape pipeline; the
-gate set is still landing across M1-M4.
+Status: **experimental**. This is the first import-shape pipeline.
 """
 
 from __future__ import annotations
