@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from repo2rlenv.auth import resolve_repo_token
+from repo2rlenv.bootstrap import ensure_bootstrap
 from repo2rlenv.bootstrap.spec import BootstrapResult
 from repo2rlenv.emitter.harbor import HarborTask, write_harbor_task
 from repo2rlenv.github import GitHubError, PullRequestSummary
@@ -63,7 +64,7 @@ from repo2rlenv.pipelines.pr_runtime import (
 from repo2rlenv.pipelines._synthesis import synthesize_problem_statement
 from repo2rlenv.provider import provider_for
 from repo2rlenv.sources import Capability
-from repo2rlenv.spec.input import GenerationInput, PipelineName
+from repo2rlenv.spec.input import GenerationInput, PipelineName, RepoSpec
 from repo2rlenv.spec.options import PrToEnvOptions
 
 logger = logging.getLogger(__name__)
@@ -226,18 +227,21 @@ def classify_validation(outcome) -> str | None:
 class PrToEnvPipeline:
     """Curated-URL PR → Harbor env. Implements the `Pipeline` Protocol.
 
-    The user must have already run `repo2rlenv bootstrap --repo <repo>` for
-    the repo whose PRs they're importing — the bootstrap image is required
-    (mirrors pr_runtime). All URLs in a single call must be from the same
-    repo, matching `input.repo`.
+    A curated URL list may span multiple repos (RFC §Motivation #2: "50 URLs
+    across 20 repos"). The pipeline groups URLs by their `(host, owner, name)`
+    and owns its own bootstrap orchestration — one `ensure_bootstrap` per
+    unique repo (cache-first, so re-runs are instant). It therefore sets
+    `requires_bootstrap = False`; `cmd_generate` passes no BootstrapResult and
+    the pipeline self-bootstraps each repo group lazily.
 
-    Cross-repo multi-URL calls are out of scope for this iteration; wrap the
-    CLI in a script if you need it.
+    A BootstrapResult may still be passed to `__init__` (e.g. by tests or
+    callers that already built one); when its `repo` matches a group it seeds
+    the cache for that group, otherwise each group bootstraps on demand.
     """
 
     name: ClassVar[PipelineName] = PipelineName.PR_TO_ENV
     required_capabilities: ClassVar[frozenset[Capability]] = frozenset({Capability.PULL_REQUESTS})
-    requires_bootstrap: ClassVar[bool] = True
+    requires_bootstrap: ClassVar[bool] = False
     experimental: ClassVar[bool] = True  # still landing gates M1-M4
 
     def __init__(
@@ -246,11 +250,6 @@ class PrToEnvPipeline:
         options: PrToEnvOptions,
         bootstrap: BootstrapResult | None = None,
     ):
-        if bootstrap is None:
-            raise RuntimeError(
-                "pr_to_env requires a BootstrapResult (set requires_bootstrap=True "
-                "and let cmd_generate trigger it, or pass one explicitly)"
-            )
         if options.url is None and options.urls_file is None:
             raise ValueError("pr_to_env requires exactly one of --pipeline-opt url= or urls_file=")
         if options.url is not None and options.urls_file is not None:
@@ -258,7 +257,13 @@ class PrToEnvPipeline:
 
         self.input = input
         self.options = options
+        # A pre-built BootstrapResult seeds the cache for its matching repo
+        # group; each group otherwise bootstraps lazily in `run()`.
+        self._seed_bootstrap = bootstrap
         self.bootstrap = bootstrap
+        # Set per repo-group in `run()` so `_build_task` resolves owner/name,
+        # provider, and access against the group currently being emitted.
+        self._current_repo: RepoSpec | None = None
         self._progress_cb = None
         self._token: str | None = None
         self._llm_cost_usd = 0.0
@@ -285,234 +290,259 @@ class PrToEnvPipeline:
             raise ValueError("pr_to_env: URL list is empty")
         return urls
 
-    def _validate_single_repo(self, urls: list[str]) -> tuple[str, str, str]:
-        """Ensure every URL points at the same (host, owner, repo). Return the triple.
+    def _group_by_repo(
+        self, urls: list[str]
+    ) -> dict[tuple[str, str, str], list[tuple[str, int]]]:
+        """Group PR/MR URLs by their (host, owner, name).
 
-        Also verify it matches `input.repo` (the anchor the bootstrap was built for).
+        Bootstrap then runs once per unique repo (RFC §Algorithm steps 2-3),
+        so a curated list spanning many repos costs one image build each.
         """
-        parsed = [parse_pr_url(u) for u in urls]
-        hosts = {p[0] for p in parsed}
-        owner_repos = {(p[1], p[2]) for p in parsed}
-        if len(hosts) > 1 or len(owner_repos) > 1:
-            raise ValueError(
-                "pr_to_env: all URLs must be from the same host+repo in a single call. "
-                f"Got hosts={hosts} owner_repos={owner_repos}. "
-                "Wrap the CLI in a script to iterate across repos."
-            )
-        host = next(iter(hosts))
-        owner, repo = next(iter(owner_repos))
+        groups: dict[tuple[str, str, str], list[tuple[str, int]]] = {}
+        for u in urls:
+            host, owner, name, number = parse_pr_url(u)
+            groups.setdefault((host, owner, name), []).append((u, number))
+        return groups
 
-        # Cross-check against input.repo (the bootstrap anchor)
-        expected_owner, expected_name = self.input.repo.owner_name
-        if (owner, repo) != (expected_owner, expected_name):
-            raise ValueError(
-                f"pr_to_env: --repo is {expected_owner}/{expected_name} but URLs point at "
-                f"{owner}/{repo}. They must match (bootstrap image is per-repo)."
-            )
-        return host, owner, repo
+    def _repo_spec_for(self, host: str, owner: str, name: str) -> RepoSpec:
+        """Build a RepoSpec for one repo group, reusing the base input's ref,
+        access, and auth-token env so token/auth resolution keeps working."""
+        base = self.input.repo
+        return RepoSpec(
+            url=f"https://{host}/{owner}/{name}",
+            ref=base.ref,
+            access=base.access,
+            auth_token_env=base.auth_token_env,
+        )
+
+    def _bootstrap_for(self, repo_spec: RepoSpec, owner: str, name: str) -> BootstrapResult:
+        """Return the BootstrapResult for one repo group.
+
+        Reuse a pre-seeded result when its repo matches (seeds the cache),
+        otherwise `ensure_bootstrap` — which is itself cache-first, so a repo
+        already bootstrapped resolves instantly.
+        """
+        seed = self._seed_bootstrap
+        if seed is not None and seed.repo == f"{owner}/{name}":
+            return seed
+        return ensure_bootstrap(
+            repo_spec,
+            self.input.bootstrap,
+            self.input.llm,
+            self.input.auth,
+        )
 
     # ---- Run loop --------------------------------------------------------
 
     def run(self, out_dir: Path) -> PipelineResult:
         out_dir.mkdir(parents=True, exist_ok=True)
         urls = self._collect_urls()
-        _host, owner, name = self._validate_single_repo(urls)
-
-        token = resolve_repo_token(self.input.repo, self.input.auth)
-        self._token = token
-        provider = provider_for(self.input.repo)
+        groups = self._group_by_repo(urls)
 
         skip_reasons: dict[str, int] = {}
         emitted = 0
         candidates = len(urls)
-        sandbox = None
 
-        try:
-            for url in urls:
-                _, _, _, pr_number = parse_pr_url(url)
-                pr_label = f"{owner}/{name}#{pr_number}"
+        # Outer loop: one repo group at a time. Each group gets its own
+        # bootstrap image, token, provider, and validation sandbox.
+        for (host, owner, name), url_pairs in groups.items():
+            repo_spec = self._repo_spec_for(host, owner, name)
+            self._current_repo = repo_spec
+            token = resolve_repo_token(repo_spec, self.input.auth)
+            self._token = token
+            provider = provider_for(repo_spec)
 
-                # Fetch PR metadata
-                try:
-                    pr = provider.fetch_pr(owner, name, pr_number, token=token)
-                except _PROVIDER_ERRORS as exc:
-                    reason = "pr_fetch_failed"
-                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                    self._emit_progress(pr_label, "error", f"{reason}: {exc}")
-                    if self.options.strict:
-                        raise
-                    continue
+            # One bootstrap image per unique repo (cache-first). Assigned to
+            # self.bootstrap so _build_task/_start_validation_sandbox see the
+            # right image for the group currently being emitted.
+            self.bootstrap = self._bootstrap_for(repo_spec, owner, name)
 
-                # Non-bug filter (reverts, cherry-picks, release chores)
-                if _is_non_bug_pr(pr.title):
-                    reason = "non_bug_pr"
-                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                    self._emit_progress(pr_label, "skip", reason)
-                    if self.options.strict:
-                        raise ValueError(f"URL {url!r} is a non-bug PR (title: {pr.title!r})")
-                    continue
+            sandbox = None
+            try:
+                for url, pr_number in url_pairs:
+                    pr_label = f"{owner}/{name}#{pr_number}"
 
-                # Fetch diff
-                try:
-                    diff = provider.fetch_pr_diff(owner, name, pr_number, token=token)
-                except _PROVIDER_ERRORS as exc:
-                    reason = "diff_fetch_failed"
-                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                    self._emit_progress(pr_label, "error", f"{reason}: {exc}")
-                    if self.options.strict:
-                        raise
-                    continue
+                    # Fetch PR metadata
+                    try:
+                        pr = provider.fetch_pr(owner, name, pr_number, token=token)
+                    except _PROVIDER_ERRORS as exc:
+                        reason = "pr_fetch_failed"
+                        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                        self._emit_progress(pr_label, "error", f"{reason}: {exc}")
+                        if self.options.strict:
+                            raise
+                        continue
 
-                # Split source vs test
-                patch, test_patch = split_patch_and_test_patch(diff)
-                if not patch.strip():
-                    reason = "empty_source_patch"
-                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                    self._emit_progress(pr_label, "skip", reason)
-                    if self.options.strict:
-                        raise ValueError(f"URL {url!r}: source patch is empty")
-                    continue
-                if not test_patch.strip():
-                    reason = "no_test_patch"
-                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                    self._emit_progress(pr_label, "skip", reason)
-                    if self.options.strict:
-                        raise ValueError(f"URL {url!r}: PR added no test files (no F2P signal)")
-                    continue
-
-                # Structural gate: at least one new test function
-                if self.options.require_new_test_funcs:
-                    n_new = _count_new_test_funcs(test_patch)
-                    if n_new == 0:
-                        reason = "no_new_test_funcs"
+                    # Non-bug filter (reverts, cherry-picks, release chores)
+                    if _is_non_bug_pr(pr.title):
+                        reason = "non_bug_pr"
                         skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
                         self._emit_progress(pr_label, "skip", reason)
                         if self.options.strict:
-                            raise ValueError(
-                                f"URL {url!r}: test_patch modifies existing tests only "
-                                "(no +def test_ hunks)"
-                            )
+                            raise ValueError(f"URL {url!r} is a non-bug PR (title: {pr.title!r})")
                         continue
 
-                # Two-stage F2P/P2P validation in the sandbox
-                fail_to_pass: list[str] = []
-                pass_to_pass: list[str] = []
-                validation_status = "skipped"
-                if not self.options.skip_validation:
-                    if sandbox is None:
-                        sandbox = self._start_validation_sandbox()
-                    from repo2rlenv.pipelines.pr_runtime_validate import validate_pr
+                    # Fetch diff
+                    try:
+                        diff = provider.fetch_pr_diff(owner, name, pr_number, token=token)
+                    except _PROVIDER_ERRORS as exc:
+                        reason = "diff_fetch_failed"
+                        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                        self._emit_progress(pr_label, "error", f"{reason}: {exc}")
+                        if self.options.strict:
+                            raise
+                        continue
 
-                    targeted_cmds = targeted_test_cmds_for_pr(
-                        normalize_test_cmds_for_runtime(self.bootstrap.test_cmds),
-                        _files_in_patch(test_patch),
-                    )
-                    outcome = validate_pr(
-                        sandbox=sandbox,
-                        base_commit=pr.base_sha,
+                    # Split source vs test
+                    patch, test_patch = split_patch_and_test_patch(diff)
+                    if not patch.strip():
+                        reason = "empty_source_patch"
+                        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                        self._emit_progress(pr_label, "skip", reason)
+                        if self.options.strict:
+                            raise ValueError(f"URL {url!r}: source patch is empty")
+                        continue
+                    if not test_patch.strip():
+                        reason = "no_test_patch"
+                        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                        self._emit_progress(pr_label, "skip", reason)
+                        if self.options.strict:
+                            raise ValueError(f"URL {url!r}: PR added no test files (no F2P signal)")
+                        continue
+
+                    # Structural gate: at least one new test function
+                    if self.options.require_new_test_funcs:
+                        n_new = _count_new_test_funcs(test_patch)
+                        if n_new == 0:
+                            reason = "no_new_test_funcs"
+                            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                            self._emit_progress(pr_label, "skip", reason)
+                            if self.options.strict:
+                                raise ValueError(
+                                    f"URL {url!r}: test_patch modifies existing tests only "
+                                    "(no +def test_ hunks)"
+                                )
+                            continue
+
+                    # Two-stage F2P/P2P validation in the sandbox
+                    fail_to_pass: list[str] = []
+                    pass_to_pass: list[str] = []
+                    validation_status = "skipped"
+                    if not self.options.skip_validation:
+                        if sandbox is None:
+                            sandbox = self._start_validation_sandbox()
+                        from repo2rlenv.pipelines.pr_runtime_validate import validate_pr
+
+                        targeted_cmds = targeted_test_cmds_for_pr(
+                            normalize_test_cmds_for_runtime(self.bootstrap.test_cmds),
+                            _files_in_patch(test_patch),
+                        )
+                        outcome = validate_pr(
+                            sandbox=sandbox,
+                            base_commit=pr.base_sha,
+                            patch=patch,
+                            test_patch=test_patch,
+                            test_cmds=targeted_cmds,
+                            language=self.bootstrap.language.value,
+                            timeout=self.options.validation_timeout_sec,
+                        )
+                        v_reason = classify_validation(outcome)
+                        if v_reason is not None:
+                            skip_reasons[v_reason] = skip_reasons.get(v_reason, 0) + 1
+                            self._emit_progress(pr_label, "skip", f"{v_reason}: {outcome.reason}")
+                            if self.options.strict:
+                                raise ValueError(f"URL {url!r}: {v_reason} ({outcome.reason})")
+                            continue
+                        fail_to_pass = outcome.fail_to_pass
+                        pass_to_pass = outcome.pass_to_pass
+                        validation_status = outcome.status
+
+                    # Count floors (M3 gate #10)
+                    if len(fail_to_pass) < self.options.min_f2p:
+                        reason = "f2p_below_floor"
+                        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                        self._emit_progress(
+                            pr_label,
+                            "skip",
+                            f"{reason} ({len(fail_to_pass)} < {self.options.min_f2p})",
+                        )
+                        if self.options.hard_drop_low_signal and self.options.strict:
+                            raise ValueError(
+                                f"URL {url!r}: F2P count {len(fail_to_pass)} < {self.options.min_f2p}"
+                            )
+                        if self.options.hard_drop_low_signal:
+                            continue
+
+                    # ---- Emit task ---------------------------------------------
+                    task = self._build_task(
+                        pr=pr,
                         patch=patch,
                         test_patch=test_patch,
-                        test_cmds=targeted_cmds,
-                        language=self.bootstrap.language.value,
-                        timeout=self.options.validation_timeout_sec,
+                        fail_to_pass=fail_to_pass,
+                        pass_to_pass=pass_to_pass,
+                        validation_status=validation_status,
                     )
-                    v_reason = classify_validation(outcome)
-                    if v_reason is not None:
-                        skip_reasons[v_reason] = skip_reasons.get(v_reason, 0) + 1
-                        self._emit_progress(pr_label, "skip", f"{v_reason}: {outcome.reason}")
-                        if self.options.strict:
-                            raise ValueError(f"URL {url!r}: {v_reason} ({outcome.reason})")
-                        continue
-                    fail_to_pass = outcome.fail_to_pass
-                    pass_to_pass = outcome.pass_to_pass
-                    validation_status = outcome.status
+                    slug = f"{owner}__{name}-{pr_number}"
+                    write_harbor_task(task, out_dir)
 
-                # Count floors (M3 gate #10)
-                if len(fail_to_pass) < self.options.min_f2p:
-                    reason = "f2p_below_floor"
-                    skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                    self._emit_progress(
-                        pr_label,
-                        "skip",
-                        f"{reason} ({len(fail_to_pass)} < {self.options.min_f2p})",
-                    )
-                    if self.options.hard_drop_low_signal and self.options.strict:
-                        raise ValueError(
-                            f"URL {url!r}: F2P count {len(fail_to_pass)} < {self.options.min_f2p}"
+                    # Oracle-gate (M3 gate #14) — run `harbor run -a oracle` and drop
+                    # the env unless reward == 1.0. Skip if user disabled it or the
+                    # harbor CLI isn't reachable (soft-warn only).
+                    if self.options.oracle_gate:
+                        reward = self._run_oracle_gate(
+                            task_dir=out_dir / slug,
+                            timeout_sec=self.options.oracle_timeout_sec,
                         )
-                    if self.options.hard_drop_low_signal:
-                        continue
+                        if reward is None:
+                            logger.warning(
+                                "oracle-gate skipped for %s (harbor CLI not reachable)", slug
+                            )
+                            self._append_ledger(
+                                out_dir,
+                                slug,
+                                pr.url,
+                                "oracle_skipped",
+                                None,
+                                len(fail_to_pass),
+                                len(pass_to_pass),
+                            )
+                        elif reward < 1.0:
+                            # Drop the env — oracle couldn't earn reward=1.0.
+                            shutil.rmtree(out_dir / slug, ignore_errors=True)
+                            reason = "oracle_below_1"
+                            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                            self._emit_progress(pr_label, "skip", f"{reason} (reward={reward})")
+                            self._append_ledger(
+                                out_dir,
+                                slug,
+                                pr.url,
+                                "dropped",
+                                reward,
+                                len(fail_to_pass),
+                                len(pass_to_pass),
+                            )
+                            if self.options.strict:
+                                raise ValueError(f"URL {url!r}: oracle reward={reward} < 1.0")
+                            continue
+                        else:
+                            self._append_ledger(
+                                out_dir,
+                                slug,
+                                pr.url,
+                                "keeper",
+                                reward,
+                                len(fail_to_pass),
+                                len(pass_to_pass),
+                            )
 
-                # ---- Emit task ---------------------------------------------
-                task = self._build_task(
-                    pr=pr,
-                    patch=patch,
-                    test_patch=test_patch,
-                    fail_to_pass=fail_to_pass,
-                    pass_to_pass=pass_to_pass,
-                    validation_status=validation_status,
-                )
-                slug = f"{owner}__{name}-{pr_number}"
-                write_harbor_task(task, out_dir)
-
-                # Oracle-gate (M3 gate #14) — run `harbor run -a oracle` and drop
-                # the env unless reward == 1.0. Skip if user disabled it or the
-                # harbor CLI isn't reachable (soft-warn only).
-                if self.options.oracle_gate:
-                    reward = self._run_oracle_gate(
-                        task_dir=out_dir / slug,
-                        timeout_sec=self.options.oracle_timeout_sec,
-                    )
-                    if reward is None:
-                        logger.warning(
-                            "oracle-gate skipped for %s (harbor CLI not reachable)", slug
-                        )
-                        self._append_ledger(
-                            out_dir,
-                            slug,
-                            pr.url,
-                            "oracle_skipped",
-                            None,
-                            len(fail_to_pass),
-                            len(pass_to_pass),
-                        )
-                    elif reward < 1.0:
-                        # Drop the env — oracle couldn't earn reward=1.0.
-                        shutil.rmtree(out_dir / slug, ignore_errors=True)
-                        reason = "oracle_below_1"
-                        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                        self._emit_progress(pr_label, "skip", f"{reason} (reward={reward})")
-                        self._append_ledger(
-                            out_dir,
-                            slug,
-                            pr.url,
-                            "dropped",
-                            reward,
-                            len(fail_to_pass),
-                            len(pass_to_pass),
-                        )
-                        if self.options.strict:
-                            raise ValueError(f"URL {url!r}: oracle reward={reward} < 1.0")
-                        continue
-                    else:
-                        self._append_ledger(
-                            out_dir,
-                            slug,
-                            pr.url,
-                            "keeper",
-                            reward,
-                            len(fail_to_pass),
-                            len(pass_to_pass),
-                        )
-
-                emitted += 1
-                self._emit_progress(pr_label, "emit", f"f2p={len(fail_to_pass)}")
-        finally:
-            if sandbox is not None:
-                try:
-                    sandbox.stop()
-                except Exception:
-                    logger.debug("sandbox stop failed", exc_info=True)
+                    emitted += 1
+                    self._emit_progress(pr_label, "emit", f"f2p={len(fail_to_pass)}")
+            finally:
+                if sandbox is not None:
+                    try:
+                        sandbox.stop()
+                    except Exception:
+                        logger.debug("sandbox stop failed", exc_info=True)
 
         return PipelineResult(
             candidates=candidates,
@@ -641,12 +671,15 @@ class PrToEnvPipeline:
         validation_status: str,
     ) -> HarborTask:
         """Assemble a HarborTask from the split diff + validation output."""
-        owner, name = self.input.repo.owner_name
+        # Resolve against the repo group currently being emitted (set in run()).
+        # Falls back to input.repo for direct callers (e.g. unit tests).
+        repo = getattr(self, "_current_repo", None) or self.input.repo
+        owner, name = repo.owner_name
         slug = f"{owner}__{name}-{pr.number}"
 
         # Instruction (leak-free): LLM-synthesized when enabled+available, else
         # pr_runtime's deterministic issue-sourced builder.
-        provider = provider_for(self.input.repo)
+        provider = provider_for(repo)
         instruction = self._instruction_for(pr, owner, name, provider)
 
         # Leak-strip v2 (gate #10): remove short-SHAs and pytest node-ids that
@@ -687,7 +720,8 @@ class PrToEnvPipeline:
             fail_to_pass=fail_to_pass,
             pass_to_pass=pass_to_pass,
         )
-        aux_files = _runtime_aux_files(fail_to_pass, pass_to_pass)
+        # Guard like pr_runtime: a 0-F2P env has no verifier lists to emit.
+        aux_files = _runtime_aux_files(fail_to_pass, pass_to_pass) if fail_to_pass else {}
 
         # Difficulty + provenance (source_files/test_files already computed
         # above for leak-v2).
@@ -718,7 +752,7 @@ class PrToEnvPipeline:
                 "ref": pr.base_sha,
                 "reference": pr.url,
                 "source_url": pr.url,
-                "source_access": self.input.repo.access,
+                "source_access": repo.access,
                 "built_at": now,
                 "reward_kinds": ["test_execution", "diff_similarity"],
                 "pr_to_env": {

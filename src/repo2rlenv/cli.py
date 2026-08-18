@@ -69,6 +69,24 @@ def cmd_generate(args: argparse.Namespace) -> int:
             "name": args.pipeline,
             "options": _parse_pipeline_opts(args.pipeline_opt),
         }
+    # pr_to_env may span repos and self-bootstraps per unique repo, so --repo is
+    # optional. When it's absent, derive a repo from the first URL so
+    # load_generation_input has a repo and downstream token/auth resolution works.
+    if not args.repo and args.pipeline == "pr_to_env":
+        from repo2rlenv.pipelines.pr_to_env import parse_pr_url, read_urls_file
+
+        popts = _parse_pipeline_opts(args.pipeline_opt)
+        first_url = popts.get("url")
+        if not first_url and popts.get("urls_file"):
+            file_urls = read_urls_file(Path(popts["urls_file"]))
+            first_url = file_urls[0] if file_urls else None
+        if first_url:
+            host, owner, name, _ = parse_pr_url(first_url)
+            overrides["repo"] = {
+                "url": f"https://{host}/{owner}/{name}",
+                "ref": args.ref,
+                "access": args.access,
+            }
     if args.llm:
         if "/" not in args.llm:
             raise SystemExit(f"--llm expects provider/model, got {args.llm!r}")
@@ -108,6 +126,24 @@ def cmd_generate(args: argparse.Namespace) -> int:
         )
 
     options = parse_options(gen_input.pipeline.name.value, gen_input.pipeline.options)
+
+    # pr_to_env groups URLs by repo and bootstraps each; if --repo was given,
+    # soft-check it is one of the repos in the URL set (warn only, never fail).
+    if gen_input.pipeline.name.value == "pr_to_env" and args.repo:
+        from repo2rlenv.pipelines.pr_to_env import parse_pr_url, read_urls_file
+
+        _urls: list[str] = []
+        if getattr(options, "url", None):
+            _urls = [options.url]
+        elif getattr(options, "urls_file", None):
+            _urls = read_urls_file(options.urls_file)
+        _url_repos = {parse_pr_url(u)[1:3] for u in _urls}
+        if _url_repos and gen_input.repo.owner_name not in _url_repos:
+            console.warn(
+                f"--repo {gen_input.repo.url!r} is not among the URL-set repos "
+                f"({sorted('/'.join(r) for r in _url_repos)}); pr_to_env bootstraps "
+                "per repo group from the URLs, so --repo only seeds token/auth defaults."
+            )
 
     # Pre-flight: can this input source serve what the pipeline needs?
     # PR-based pipelines (pr_diff, pr_runtime) and cve_patches require platform

@@ -103,7 +103,8 @@ class TestPipelineProtocol:
     def test_has_required_class_attrs(self):
         assert hasattr(PrToEnvPipeline, "name")
         assert hasattr(PrToEnvPipeline, "requires_bootstrap")
-        assert PrToEnvPipeline.requires_bootstrap is True
+        # pr_to_env owns its own bootstrap orchestration (one per unique repo).
+        assert PrToEnvPipeline.requires_bootstrap is False
         # Should be marked experimental while gates are landing.
         assert getattr(PrToEnvPipeline, "experimental", False) is True
 
@@ -111,6 +112,22 @@ class TestPipelineProtocol:
         from repo2rlenv.pipelines import PIPELINES
 
         assert "pr_to_env" in PIPELINES
+
+    def test_group_by_repo_splits_multiple_repos(self):
+        inst = PrToEnvPipeline.__new__(PrToEnvPipeline)
+        urls = [
+            "https://github.com/pallets/click/pull/1",
+            "https://github.com/pallets/click/pull/2",
+            "https://github.com/urfave/cli/pull/9",
+        ]
+        groups = inst._group_by_repo(urls)
+        assert groups[("github.com", "pallets", "click")] == [
+            ("https://github.com/pallets/click/pull/1", 1),
+            ("https://github.com/pallets/click/pull/2", 2),
+        ]
+        assert groups[("github.com", "urfave", "cli")] == [
+            ("https://github.com/urfave/cli/pull/9", 9),
+        ]
 
 
 class TestLeakGrepV2:
