@@ -302,3 +302,90 @@ def test_source_url_top_level_and_not_in_instruction():
     assert task.repo2env["pipeline"] == "pr_to_env"
     assert task.repo2env["source_url"] == "https://github.com/o/n/pull/7"
     assert "https://github.com/o/n/pull/7" not in task.instruction
+
+
+def test_run_emits_one_task(tmp_path: Path):
+    """End-to-end run() smoke test: one curated URL, fully mocked provider +
+    sandbox + bootstrap, must complete and emit exactly one task.
+
+    Regression guard for the fatal bugs the pr_to_env completion work fixed:
+    run() must drive its group-by-repo loop to a real emit without raising
+    AttributeError/TypeError (the call itself proves that) and must call
+    write_harbor_task and count emitted == 1.
+    """
+    inst = PrToEnvPipeline.__new__(PrToEnvPipeline)
+
+    # ---- Instance attributes run() reads (built via __new__, no __init__) ----
+    inst.input = MagicMock()
+    inst.input.repo.owner_name = ("o", "n")
+    inst.input.repo.access = "public"
+    inst.input.repo.ref = "main"
+    inst.input.repo.auth_token_env = None
+    inst.input.llm = None
+    inst.options = MagicMock(
+        url="https://github.com/o/n/pull/7",
+        urls_file=None,
+        strict=False,
+        skip_validation=False,
+        require_new_test_funcs=True,
+        synthesize_with_llm=False,
+        oracle_gate=False,
+        min_f2p=1,
+        min_p2p=0,
+        hard_drop_low_signal=False,
+        validation_timeout_sec=60,
+    )
+    inst._progress_cb = None
+    inst._llm_cost_usd = 0.0
+    inst._token = None
+    inst._current_repo = None
+    # Seed bootstrap whose repo matches the URL's o/n group, so _bootstrap_for
+    # returns it directly and ensure_bootstrap is never reached.
+    boot = MagicMock(image_digest="img@sha", image_tag="img", test_cmds=["pytest"], repo="o/n")
+    boot.language.value = "python"
+    inst._seed_bootstrap = boot
+    inst.bootstrap = boot
+
+    # ---- Provider mock: real PR summary + two-file diff, no linked issue ----
+    pr = github.PullRequestSummary(
+        number=7, title="Crash on empty input", body="Some description of the bug.",
+        state="MERGED", merged_at="2026-01-01T00:00:00Z", base_ref="main",
+        base_sha="c" * 40, head_sha="d", is_draft=False,
+        url="https://github.com/o/n/pull/7", changed_files=["src/a.py", "tests/test_a.py"],
+    )
+    diff = (
+        "diff --git a/src/a.py b/src/a.py\n"
+        "--- a/src/a.py\n"
+        "+++ b/src/a.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def foo():\n"
+        "-    return None\n"
+        "+    return 1\n"
+        "diff --git a/tests/test_a.py b/tests/test_a.py\n"
+        "--- a/tests/test_a.py\n"
+        "+++ b/tests/test_a.py\n"
+        "@@ -0,0 +1,2 @@\n"
+        "+def test_a():\n"
+        "+    assert foo() == 1\n"
+    )
+    provider = MagicMock()
+    provider.fetch_pr.return_value = pr
+    provider.fetch_pr_diff.return_value = diff
+    provider.fetch_issue.return_value = None
+
+    outcome = SimpleNamespace(
+        status="verified", reason="", fail_to_pass=["test_a"], pass_to_pass=["test_b"],
+    )
+    write_harbor_task = MagicMock()
+
+    with patch("repo2rlenv.pipelines.pr_to_env.provider_for", return_value=provider), \
+         patch("repo2rlenv.pipelines.pr_to_env.resolve_repo_token", return_value=None), \
+         patch("repo2rlenv.pipelines.pr_to_env.ensure_bootstrap", return_value=boot), \
+         patch("repo2rlenv.pipelines.pr_to_env.write_harbor_task", write_harbor_task), \
+         patch.object(PrToEnvPipeline, "_start_validation_sandbox", return_value=MagicMock()), \
+         patch("repo2rlenv.pipelines.pr_runtime_validate.validate_pr", return_value=outcome):
+        result = inst.run(tmp_path)
+
+    assert result.emitted == 1
+    assert result.candidates == 1
+    assert write_harbor_task.called
