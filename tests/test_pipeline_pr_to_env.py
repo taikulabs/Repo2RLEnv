@@ -223,7 +223,8 @@ def test_instruction_deterministic_when_llm_off():
     inst.options = MagicMock(synthesize_with_llm=True)  # on, but no llm -> deterministic
     inst._llm_cost_usd = 0.0
     inst._token = None
-    text = inst._instruction_for(_fake_pr(), "o", "n", github)
+    with patch("repo2rlenv.github.fetch_issue", return_value=None):
+        text = inst._instruction_for(_fake_pr(), "o", "n", github)
     assert "# Issue" in text
     assert "abcdef1234567" not in text  # leak-stripped by _build_instruction hygiene
 
@@ -262,3 +263,25 @@ def test_classify_bootstrap_failed():
 def test_classify_ok_returns_none():
     o = SimpleNamespace(status="verified", reason="", fail_to_pass=["a"], pass_to_pass=["b"])
     assert classify_validation(o) is None
+
+
+def test_source_url_top_level_and_not_in_instruction():
+    # Build a task via _build_task with mocks (llm off -> deterministic instruction).
+    inst = PrToEnvPipeline.__new__(PrToEnvPipeline)
+    inst.input = MagicMock(llm=None)
+    inst.input.repo.owner_name = ("o", "n")
+    inst.input.repo.access = "public"
+    inst.options = MagicMock(synthesize_with_llm=False, min_f2p=3, min_p2p=3)
+    inst._token = None
+    inst._llm_cost_usd = 0.0
+    inst.bootstrap = MagicMock(image_digest="img@sha", image_tag="img", test_cmds=["pytest"])
+    inst.bootstrap.language.value = "python"
+    pr = github.PullRequestSummary(
+        number=7, title="t", body="b", state="MERGED", merged_at=None, base_ref="main",
+        base_sha="c" * 40, head_sha="d", is_draft=False,
+        url="https://github.com/o/n/pull/7", changed_files=["src/a.py", "tests/test_a.py"])
+    task = inst._build_task(pr=pr, patch="+x", test_patch="+def test_a(): pass",
+                            fail_to_pass=["test_a"], pass_to_pass=[], validation_status="verified")
+    assert task.repo2env["pipeline"] == "pr_to_env"
+    assert task.repo2env["source_url"] == "https://github.com/o/n/pull/7"
+    assert "https://github.com/o/n/pull/7" not in task.instruction

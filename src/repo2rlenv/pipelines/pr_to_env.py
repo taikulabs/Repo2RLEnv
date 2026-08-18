@@ -453,7 +453,7 @@ class PrToEnvPipeline:
                     validation_status=validation_status,
                 )
                 slug = f"{owner}__{name}-{pr_number}"
-                write_harbor_task(task, out_dir / slug)
+                write_harbor_task(task, out_dir)
 
                 # Oracle-gate (M3 gate #14) — run `harbor run -a oracle` and drop
                 # the env unless reward == 1.0. Skip if user disabled it or the
@@ -697,24 +697,27 @@ class PrToEnvPipeline:
         now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
         return HarborTask(
-            name=f"{owner}/{slug}",
+            name=slug,
+            org=self.input.output.org,
             description=pr.title,
             category="code-modification",
             keywords=[name, "pr_to_env", "sandbox-verified"],
             difficulty=difficulty,
             instruction=instruction,
             oracle_diff=patch,
-            solve_cmd="git apply /workspace/solution/patch.diff",
-            eval_script=eval_script,
-            env_dockerfile=env_dockerfile,
-            env_compose=env_compose,
-            aux_files=aux_files,
-            provenance={
+            environment_dockerfile=env_dockerfile,
+            test_script=eval_script,
+            aux_files={
+                **aux_files,
+                "environment/docker-compose.yaml": env_compose,
+            },
+            repo2env={
                 "pipeline": "pr_to_env",
                 "pipeline_version": "0.9.0",
                 "repo": f"{owner}/{name}",
                 "ref": pr.base_sha,
                 "reference": pr.url,
+                "source_url": pr.url,
                 "source_access": self.input.repo.access,
                 "built_at": now,
                 "reward_kinds": ["test_execution", "diff_similarity"],
