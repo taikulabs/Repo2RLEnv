@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
+
+from repo2rlenv import github
 
 from repo2rlenv.pipelines.pr_to_env import (
     PrToEnvPipeline,
@@ -201,3 +204,36 @@ def test_ledger_shape(tmp_path: Path, monkeypatch):
     assert entry["f2p_count"] == 5
     assert entry["p2p_count"] == 7
     assert "timestamp" in entry
+
+
+def _fake_pr():
+    return github.PullRequestSummary(
+        number=7, title="Crash on empty input", body="Closes #6\nFixed in abcdef1234567",
+        state="MERGED", merged_at="2026-01-01T00:00:00Z", base_ref="main",
+        base_sha="c" * 40, head_sha="d", is_draft=False,
+        url="https://github.com/o/n/pull/7", changed_files=["src/a.py", "tests/test_a.py"],
+    )
+
+
+def test_instruction_deterministic_when_llm_off():
+    inst = PrToEnvPipeline.__new__(PrToEnvPipeline)
+    inst.input = MagicMock(llm=None)
+    inst.options = MagicMock(synthesize_with_llm=True)  # on, but no llm -> deterministic
+    inst._llm_cost_usd = 0.0
+    inst._token = None
+    text = inst._instruction_for(_fake_pr(), "o", "n", github)
+    assert "# Issue" in text
+    assert "abcdef1234567" not in text  # leak-stripped by _build_instruction hygiene
+
+
+def test_instruction_uses_synthesis_when_enabled():
+    inst = PrToEnvPipeline.__new__(PrToEnvPipeline)
+    inst.input = MagicMock(llm=MagicMock())
+    inst.options = MagicMock(synthesize_with_llm=True, max_llm_tokens=512, llm_temperature=0.3)
+    inst._llm_cost_usd = 0.0
+    inst._token = None
+    with patch("repo2rlenv.pipelines.pr_to_env.synthesize_problem_statement",
+               return_value=("**Title:** X\n## Description\nTen words of a real problem statement here now.", 0.02)):
+        text = inst._instruction_for(_fake_pr(), "o", "n", github)
+    assert "**Title:** X" in text
+    assert inst._llm_cost_usd == 0.02

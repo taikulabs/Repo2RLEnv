@@ -66,6 +66,7 @@ from repo2rlenv.pipelines.pr_runtime import (
     split_patch_and_test_patch,
     targeted_test_cmds_for_pr,
 )
+from repo2rlenv.pipelines._synthesis import synthesize_problem_statement
 from repo2rlenv.provider import provider_for
 from repo2rlenv.sources import Capability
 from repo2rlenv.spec.input import GenerationInput, PipelineName
@@ -252,6 +253,7 @@ class PrToEnvPipeline:
         self.bootstrap = bootstrap
         self._progress_cb = None
         self._token: str | None = None
+        self._llm_cost_usd = 0.0
 
     def set_progress_callback(self, cb) -> None:
         self._progress_cb = cb
@@ -587,6 +589,42 @@ class PrToEnvPipeline:
         sandbox.start()
         return sandbox
 
+    def _instruction_for(self, pr, owner: str, name: str, provider) -> str:
+        """Leak-free problem statement. LLM synthesis when enabled+available,
+        else pr_runtime's deterministic issue-sourced builder.
+
+        Both paths are run through the v2 hard-strip (short-SHA + pytest
+        node-id) so the returned text is leak-free on its own; the identical
+        pass in ``_build_task`` is then idempotent."""
+        text: str | None = None
+        if self.options.synthesize_with_llm and self.input.llm:
+            src = f"PR title: {pr.title}\nPR body:\n{pr.body or ''}\n"
+            issue_num = _linked_issue_number(pr.body or "")
+            if issue_num is not None:
+                fetched = provider.fetch_issue(owner, name, issue_num, token=self._token)
+                if fetched:
+                    src += f"\nLinked issue title: {fetched[0]}\nLinked issue body:\n{fetched[1] or ''}\n"
+            body, cost = synthesize_problem_statement(
+                self.input.llm, src,
+                max_tokens=self.options.max_llm_tokens,
+                temperature=self.options.llm_temperature,
+            )
+            self._llm_cost_usd += cost
+            if body:
+                text = (
+                    f"# Issue\n\n{body}\n\n## Task\n\n"
+                    "Modify the repository so that the issue described above is resolved. "
+                    "The task's test suite verifies your patch by applying it on top of "
+                    f"the base commit `{pr.base_sha[:12]}` and running the modified tests."
+                    "Do not attempt to cheat by looking up existing solutions to this PR, including searching the web, querying GitHub, attempting to fetch newer commits, inspecting release artifacts, or otherwise looking up the existing PR solution on the internet. Work only from the local repository checkout and the issue description above."
+                )
+        if text is None:
+            # Fallback: deterministic, issue-sourced.
+            text = _build_instruction(pr, owner, name, token=self._token, provider=provider)
+        # v2 hard-strip (short-SHA + pytest node-id); no source/test files here,
+        # so only the always-on hard-strips fire (soft-flag warnings suppressed).
+        return _leak_grep_v2(text, [], [])[0]
+
     def _build_task(
         self,
         *,
@@ -601,26 +639,10 @@ class PrToEnvPipeline:
         owner, name = self.input.repo.owner_name
         slug = f"{owner}__{name}-{pr.number}"
 
-        # Instruction (leak-free per pr_runtime._build_instruction). Linked-issue
-        # text is looked up if the PR body cites one.
-        linked_issue = _linked_issue_number(pr.body or "")
-        issue_body = None
-        if linked_issue is not None:
-            try:
-                provider = provider_for(self.input.repo)
-                issue_body = (
-                    provider.fetch_issue_body(owner, name, linked_issue, token=self._token)
-                    if hasattr(provider, "fetch_issue_body")
-                    else None
-                )
-            except Exception:
-                issue_body = None
-
-        instruction = _build_instruction(
-            pr_title=pr.title,
-            pr_body=pr.body or "",
-            linked_issue_body=issue_body,
-        )
+        # Instruction (leak-free): LLM-synthesized when enabled+available, else
+        # pr_runtime's deterministic issue-sourced builder.
+        provider = provider_for(self.input.repo)
+        instruction = self._instruction_for(pr, owner, name, provider)
 
         # Leak-strip v2 (gate #10): remove short-SHAs and pytest node-ids that
         # sneak past the v1 patterns; soft-warn on basename/dirname hits.

@@ -301,6 +301,12 @@ class PrToEnvOptions(_BaseOptions):
     # `_build_instruction` verbatim.
     synthesize_with_llm: bool = True
 
+    # Synthesis knobs (mirror commit_runtime). min_problem_statement_words
+    # gates fallback quality; RFC default 0 (user curated the URLs).
+    min_problem_statement_words: int = 0
+    llm_temperature: float = 0.3
+    max_llm_tokens: int = 1024
+
 
 OPTIONS_REGISTRY: dict[str, type[_BaseOptions]] = {
     "pr_runtime": PRRuntimeOptions,
