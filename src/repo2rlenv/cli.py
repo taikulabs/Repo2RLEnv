@@ -196,6 +196,37 @@ def cmd_generate(args: argparse.Namespace) -> int:
             console.error(str(exc))
             return 2
 
+    # Apply CLI bootstrap overrides (language / base-image / budget / --bootstrap-opt)
+    # to the shared spec so BOTH eager pipelines (requires_bootstrap=True) and lazy
+    # self-bootstrapping pipelines (e.g. pr_to_env, which run ensure_bootstrap inside
+    # their own run()) honor them. These overrides previously lived inside the
+    # requires_bootstrap branch below and were silently dropped for lazy pipelines,
+    # so --language was ignored -> different cache slot -> spurious re-bootstrap.
+    from repo2rlenv.bootstrap import LanguageHint
+
+    bspec = gen_input.bootstrap.model_copy(deep=True)
+    if args.language:
+        try:
+            bspec.languages_hint = [LanguageHint(args.language).value]
+        except ValueError as exc:
+            raise SystemExit(f"unknown --language: {args.language!r}") from exc
+    if args.base_image:
+        bspec.base_image = args.base_image
+    # --max-spend-usd=0 ⇒ no cap; map to None
+    if args.max_spend_usd is not None:
+        bspec.max_llm_spend_usd = args.max_spend_usd if args.max_spend_usd > 0 else None
+    # Generic --bootstrap-opt key=value for any other BootstrapSpec field
+    # (cache_dir / max_iterations / max_seconds / image_registry / platform / ...)
+    for k, v in _parse_pipeline_opts(getattr(args, "bootstrap_opt", None)).items():
+        if not hasattr(bspec, k):
+            raise SystemExit(f"--bootstrap-opt: unknown BootstrapSpec field {k!r}")
+        # Pydantic will coerce types as needed (str→Path, str→int, etc.)
+        try:
+            bspec = bspec.model_copy(update={k: v})
+        except Exception as exc:
+            raise SystemExit(f"--bootstrap-opt {k}={v!r}: {exc}") from exc
+    gen_input.bootstrap = bspec
+
     # Auto-trigger bootstrap for sandbox-required pipelines (requires_bootstrap=True).
     # Cache hit ⇒ instant; cache miss ⇒ full LLM-agent run with the live UI.
     bootstrap_result = None
@@ -206,45 +237,26 @@ def cmd_generate(args: argparse.Namespace) -> int:
         )
         return 2
     if getattr(pipeline_cls, "requires_bootstrap", False):
-        from repo2rlenv.bootstrap import LanguageHint, ensure_bootstrap
+        from repo2rlenv.bootstrap import ensure_bootstrap
         from repo2rlenv.bootstrap.runner import BootstrapError
         from repo2rlenv.ui.views.bootstrap import bootstrap_view_or_plain
-
-        # Mutate spec with CLI overrides (language / base-image / budget / force / --bootstrap-opt)
-        bspec = gen_input.bootstrap.model_copy(deep=True)
-        if args.language:
-            try:
-                bspec.languages_hint = [LanguageHint(args.language).value]
-            except ValueError as exc:
-                raise SystemExit(f"unknown --language: {args.language!r}") from exc
-        if args.base_image:
-            bspec.base_image = args.base_image
-        # --max-spend-usd=0 ⇒ no cap; map to None
-        if args.max_spend_usd is not None:
-            bspec.max_llm_spend_usd = args.max_spend_usd if args.max_spend_usd > 0 else None
-        # Generic --bootstrap-opt key=value for any other BootstrapSpec field
-        # (cache_dir / max_iterations / max_seconds / image_registry / platform / ...)
-        for k, v in _parse_pipeline_opts(getattr(args, "bootstrap_opt", None)).items():
-            if not hasattr(bspec, k):
-                raise SystemExit(f"--bootstrap-opt: unknown BootstrapSpec field {k!r}")
-            # Pydantic will coerce types as needed (str→Path, str→int, etc.)
-            try:
-                bspec = bspec.model_copy(update={k: v})
-            except Exception as exc:
-                raise SystemExit(f"--bootstrap-opt {k}={v!r}: {exc}") from exc
         with bootstrap_view_or_plain(
             repo=gen_input.repo.url,
             ref=gen_input.repo.ref,
             model=gen_input.llm.qualified_name if gen_input.llm else "none",
-            max_iterations=bspec.max_iterations,
-            language=(bspec.languages_hint[0] if bspec.languages_hint else "unknown"),
-            base_image=bspec.base_image or "(auto-detect)",
+            max_iterations=gen_input.bootstrap.max_iterations,
+            language=(
+                gen_input.bootstrap.languages_hint[0]
+                if gen_input.bootstrap.languages_hint
+                else "unknown"
+            ),
+            base_image=gen_input.bootstrap.base_image or "(auto-detect)",
             force_plain=args.no_ui,
         ) as bs_view:
             try:
                 bootstrap_result = ensure_bootstrap(
                     gen_input.repo,
-                    bspec,
+                    gen_input.bootstrap,
                     gen_input.llm,
                     gen_input.auth,
                     force=args.force_bootstrap,
