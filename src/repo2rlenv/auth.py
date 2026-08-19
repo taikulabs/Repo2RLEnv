@@ -68,7 +68,6 @@ def resolve_llm_api_key(provider: str, llm_api_key_env: str | None = None) -> st
             return v
 
     defaults = {
-        "anthropic": "ANTHROPIC_API_KEY",
         "openai": "OPENAI_API_KEY",
         "huggingface": "HF_TOKEN",
         "together": "TOGETHER_API_KEY",
@@ -78,6 +77,23 @@ def resolve_llm_api_key(provider: str, llm_api_key_env: str | None = None) -> st
     if env_name:
         return os.environ.get(env_name)
     return None
+
+
+def resolve_claude_oauth_token(oauth_token_env: str | None = None) -> str | None:
+    """Return a Claude Code OAuth token (``sk-ant-oat01-*``).
+
+    Resolution order: the explicit override env var named by ``oauth_token_env``
+    (if set and non-empty), then the ``CLAUDE_CODE_OAUTH_TOKEN`` env var.
+
+    Such a token is generated via ``claude setup-token`` and requires a Claude
+    Pro/Max subscription. No secret is ever logged.
+    """
+    if oauth_token_env:
+        token = os.environ.get(oauth_token_env)
+        if token:
+            return token
+
+    return os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
 
 
 def auth_clone_url(repo_url: str, token: str | None) -> str:

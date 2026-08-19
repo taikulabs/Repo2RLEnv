@@ -15,7 +15,7 @@ concurrency:
 
 env:
   # Disable LiteLLM and HF Hub network calls / interactive prompts during tests
-  ANTHROPIC_API_KEY: "fake-key-for-tests"
+  CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-fake-for-tests"
   OPENAI_API_KEY: "fake-key-for-tests"
   HF_HUB_DISABLE_TELEMETRY: "1"
   PYTHONDONTWRITEBYTECODE: "1"

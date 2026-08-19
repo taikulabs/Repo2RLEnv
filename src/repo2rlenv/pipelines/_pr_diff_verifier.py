@@ -268,6 +268,7 @@ _JUDGE_PROMPT = (
 
 
 _DEFAULT_JUDGE_MODEL = "claude-haiku-4-5-20251001"
+_CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
 
 def llm_judge(
@@ -275,7 +276,7 @@ def llm_judge(
     instruction: str,
     oracle: str,
     predicted: str,
-    api_key: str,
+    oauth_token: str,
     model: str = _DEFAULT_JUDGE_MODEL,
     timeout: int = 60,
 ) -> tuple[float | None, str]:
@@ -287,7 +288,7 @@ def llm_judge(
     ``"missing_score"``. Caller redistributes the judge weight if score
     is None.
     """
-    if not api_key:
+    if not oauth_token:
         return None, "no_api_key"
     if not predicted.strip():
         return 0.0, "empty_predicted"
@@ -302,6 +303,7 @@ def llm_judge(
         {
             "model": model,
             "max_tokens": 200,
+            "system": [{"type": "text", "text": _CLAUDE_CODE_IDENTITY}],
             "messages": [{"role": "user", "content": prompt}],
         }
     ).encode("utf-8")
@@ -309,7 +311,8 @@ def llm_judge(
         "https://api.anthropic.com/v1/messages",
         data=body,
         headers={
-            "x-api-key": api_key,
+            "Authorization": f"Bearer {oauth_token}",
+            "anthropic-beta": "oauth-2025-04-20",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         },
@@ -435,7 +438,7 @@ def main(argv: list[str] | None = None) -> int:
     oracle = _read_or_empty(args[0])
     predicted = _read_or_empty(args[1])
     instruction = _read_or_empty(args[2])
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
     judge_model = os.environ.get("R2E_JUDGE_MODEL", _DEFAULT_JUDGE_MODEL)
 
     fv = format_valid(predicted)
@@ -447,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         instruction=instruction,
         oracle=oracle,
         predicted=predicted,
-        api_key=api_key,
+        oauth_token=oauth_token,
         model=judge_model,
     )
 

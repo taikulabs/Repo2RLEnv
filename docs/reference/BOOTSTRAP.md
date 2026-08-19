@@ -74,7 +74,7 @@ Set the provider's default environment variable; the CLI picks it up automatical
 
 | Provider | Env var |
 |---|---|
-| Anthropic | `ANTHROPIC_API_KEY` |
+| Anthropic | `CLAUDE_CODE_OAUTH_TOKEN` |
 | OpenAI | `OPENAI_API_KEY` |
 | Hugging Face | `HF_TOKEN` |
 | Other | override via `--llm-key-env` or YAML config |

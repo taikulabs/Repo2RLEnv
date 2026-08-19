@@ -1,21 +1,27 @@
 """LiteLLM wrapper — single entry point across providers, with cost tracking.
 
-The pipelines call `complete(input, prompt)`; we resolve the API key from
+The pipelines call `complete(input, prompt)`; we resolve credentials from
 either the LLMSpec hint or the provider-default env var, dispatch, then use
-LiteLLM's `completion_cost()` to attach a USD estimate.
+LiteLLM's `completion_cost()` to attach a USD estimate. The Anthropic
+provider is the exception: it bypasses LiteLLM and calls the Messages API
+directly using a Claude Code OAuth token (Bearer auth), with cost 0.0.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
-from repo2rlenv.auth import resolve_llm_api_key
+from repo2rlenv.auth import resolve_claude_oauth_token, resolve_llm_api_key
 from repo2rlenv.spec.input import LLMSpec
 
 logger = logging.getLogger(__name__)
 
+_CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
 # Models that reject any `temperature` value (forced default). Add patterns
 # as new releases land. Probed empirically via scripts/probe_llm_routes.py.
@@ -45,6 +51,11 @@ def _is_failover_eligible(exc: BaseException) -> bool:
     have to import the symbols (some live in nested submodules and shift
     between versions).
     """
+    # HTTPError is a subclass of URLError, so check it first for the status code.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or 500 <= exc.code < 600
+    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):
+        return True
     name = type(exc).__name__
     # Retry on: 5xx upstream, rate limits, network blips, timeouts.
     # Don't retry on: 4xx bad-request, auth errors, not-found, content filter.
@@ -58,6 +69,82 @@ def _is_failover_eligible(exc: BaseException) -> bool:
     }
 
 
+def _do_complete_anthropic_oauth(
+    spec: LLMSpec,
+    *,
+    system: str | None,
+    user: str,
+    max_tokens: int,
+    temperature: float,
+) -> LLMResponse:
+    """Anthropic path via Claude Code OAuth, bypassing LiteLLM.
+
+    The LiteLLM SDK forces the credential into the `x-api-key` header, which
+    Anthropic rejects for OAuth tokens (litellm issue #19618). We therefore
+    call the Messages API directly with `Authorization: Bearer <token>` and
+    the OAuth beta header. urllib errors propagate so `complete()` can fail
+    over. The token is never logged.
+    """
+    token = resolve_claude_oauth_token(spec.oauth_token_env)
+    if token is None:
+        raise RuntimeError(
+            "no Claude Code OAuth token resolved for provider 'anthropic'. "
+            "Set CLAUDE_CODE_OAUTH_TOKEN (run 'claude setup-token')."
+        )
+
+    # The first system block MUST be the Claude Code identity verbatim;
+    # Anthropic rejects OAuth calls otherwise.
+    system_blocks: list[dict] = [{"type": "text", "text": _CLAUDE_CODE_IDENTITY}]
+    if system:
+        system_blocks.append({"type": "text", "text": system})
+
+    body: dict = {
+        "model": spec.model,  # bare id, not spec.qualified_name
+        "max_tokens": max_tokens,
+        "system": system_blocks,
+        "messages": [{"role": "user", "content": user}],
+    }
+    if _supports_temperature(spec.model):
+        body["temperature"] = temperature
+
+    url = spec.endpoint or "https://api.anthropic.com/v1/messages"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=spec.timeout_sec) as resp:
+        payload = json.loads(resp.read())
+
+    content = "".join(
+        b.get("text", "")
+        for b in payload.get("content", [])
+        if b.get("type") == "text"
+    )
+    usage = payload.get("usage") or {}
+    prompt_tokens = usage.get("input_tokens", 0) or 0
+    completion_tokens = usage.get("output_tokens", 0) or 0
+
+    # Subscription OAuth usage has no per-token billing, so cost is always 0.0.
+    # This means the bootstrap max_spend_usd cap never trips for Claude —
+    # intentional for OAuth/subscription auth.
+    return LLMResponse(
+        content=content,
+        usage=usage or None,
+        cost_usd=0.0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
 def _do_complete(
     spec: LLMSpec,
     *,
@@ -67,6 +154,15 @@ def _do_complete(
     temperature: float,
 ) -> LLMResponse:
     """One non-fallback chat-completion call. Internal helper for `complete()`."""
+    if spec.provider == "anthropic":
+        return _do_complete_anthropic_oauth(
+            spec,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
     import litellm  # type: ignore[import-untyped]
 
     api_key = resolve_llm_api_key(spec.provider, spec.api_key_env)

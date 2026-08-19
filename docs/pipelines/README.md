@@ -138,8 +138,8 @@ harbor run -p /tmp/pr-diff-click -a oracle --env docker
 # verify the published reference dataset:
 harbor run -p /tmp/pr-diff-click -a claude-code \
   -m anthropic/claude-sonnet-4-6 \
-  --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  --ve ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+  --ae CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \
+  --ve CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \
   --env docker --max-retries 2
 
 # Same env, different agent. Harbor has 25+ harnesses — swap `-a` and
@@ -154,7 +154,7 @@ harbor run -p /tmp/pr-diff-click -a claude-code \
 #   -a copilot-cli        (uses GH_TOKEN)
 #   -a mini-swe-agent · swe-agent · cursor-cli · kimi-cli · goose · ...
 # The verifier's LLM-judge always uses Anthropic (Haiku) — pass
-# ANTHROPIC_API_KEY via `--ve` regardless of which agent you run.
+# CLAUDE_CODE_OAUTH_TOKEN via `--ve` regardless of which agent you run.
 
 # Publish
 repo2rlenv push /tmp/pr-diff-click <your-org>/<dataset-name>

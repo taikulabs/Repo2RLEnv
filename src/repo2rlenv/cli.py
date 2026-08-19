@@ -25,7 +25,7 @@ logger = logging.getLogger("repo2rlenv")
 
 
 def _load_dotenv_if_present() -> None:
-    """Load .env so OPENAI_API_KEY / ANTHROPIC_API_KEY / HF_TOKEN are available."""
+    """Load .env so OPENAI_API_KEY / CLAUDE_CODE_OAUTH_TOKEN / HF_TOKEN are available."""
     try:
         from dotenv import load_dotenv
 

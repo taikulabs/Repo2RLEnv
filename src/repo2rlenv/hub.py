@@ -166,7 +166,7 @@ def _reward_doc_for(pipeline: str) -> str:
         return (
             "The reward is a **6-component diff-similarity** score "
             "(format / size / file-targeting / region-overlap / changes-only "
-            "similarity / LLM-judge). The `--ve ANTHROPIC_API_KEY=...` verifier-env "
+            "similarity / LLM-judge). The `--ve CLAUDE_CODE_OAUTH_TOKEN=...` verifier-env "
             "pass enables the LLM-judge component; without it the verifier still "
             "produces a valid score with `llm_judge: null` and the deterministic "
             "weights renormalized. Full breakdown in `/logs/verifier/reward-details.json`."
@@ -286,7 +286,7 @@ harbor run \\
   -p /tmp/{dataset_name} \\
   -a claude-code -m anthropic/claude-sonnet-4-6 \\
   --ak max_budget_usd=2.00 \\
-  --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \\
+  --ae CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \\
   --env docker
 ```
 {_reward_doc_for(pipeline)}"""

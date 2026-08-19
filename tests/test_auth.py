@@ -7,6 +7,7 @@ from unittest import mock
 
 from repo2rlenv.auth import (
     auth_clone_url,
+    resolve_claude_oauth_token,
     resolve_github_token,
     resolve_hf_token,
     resolve_llm_api_key,
@@ -46,13 +47,27 @@ def test_clone_url_passthrough_without_token():
 
 
 def test_llm_api_key_resolution_uses_provider_default():
-    with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-xxx"}):
-        assert resolve_llm_api_key("anthropic") == "sk-ant-xxx"
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-oai-xxx"}):
+        assert resolve_llm_api_key("openai") == "sk-oai-xxx"
 
 
 def test_llm_api_key_resolution_explicit_env():
     with mock.patch.dict(os.environ, {"MY_KEY": "custom"}):
-        assert resolve_llm_api_key("anthropic", "MY_KEY") == "custom"
+        assert resolve_llm_api_key("openai", "MY_KEY") == "custom"
+
+
+def test_claude_oauth_token_from_default_env():
+    with mock.patch.dict(
+        os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-xxx"}, clear=True
+    ):
+        assert resolve_claude_oauth_token() == "sk-ant-oat01-xxx"
+
+
+def test_claude_oauth_token_explicit_env_override():
+    with mock.patch.dict(os.environ, {"MY_OAUTH": "sk-ant-oat01-yyy"}, clear=True):
+        assert resolve_claude_oauth_token("MY_OAUTH") == "sk-ant-oat01-yyy"
+    with mock.patch.dict(os.environ, {}, clear=True):
+        assert resolve_claude_oauth_token() is None
 
 
 def test_hf_token_falls_back_to_env():
