@@ -124,6 +124,7 @@ DEFAULT_ALLOW_HOSTS: tuple[str, ...] = (
     # Anthropic (claude-code + Sonnet/Opus)
     "api.anthropic.com",
     "claude.ai",
+    "downloads.claude.ai",
     # OpenAI (codex + GPT-5.3-codex)
     "api.openai.com",
     "chatgpt.com",
