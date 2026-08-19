@@ -13,7 +13,7 @@ brew install gh        # or: see https://cli.github.com
 gh auth login
 
 # An LLM key (any of the providers LiteLLM supports)
-export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY / HF_TOKEN / ...
+export CLAUDE_CODE_OAUTH_TOKEN=...   # or OPENAI_API_KEY / HF_TOKEN / ...
 
 # (Optional) HF Hub login if you plan to push the dataset
 huggingface-cli login
@@ -111,14 +111,14 @@ harbor run -p ./datasets/<dataset-name> -a oracle --env docker
 # Each agent expects its own provider env var (OPENAI_API_KEY,
 # GOOGLE_API_KEY, GITHUB_TOKEN for copilot, …) — see `harbor run --help`
 # for the full list. The verifier's LLM-judge component (when enabled)
-# also needs ANTHROPIC_API_KEY — pass via --ve so it reaches the verifier
+# also needs CLAUDE_CODE_OAUTH_TOKEN — pass via --ve so it reaches the verifier
 # container.
 harbor run \
   -p ./datasets/<dataset-name> \
   -a claude-code -m anthropic/claude-sonnet-4-6 \
   --ak max_budget_usd=2.00 \
-  --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  --ve ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+  --ae CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \
+  --ve CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \
   --env docker
 
 # Same env, different agent — openhands with GPT-4o:
@@ -126,7 +126,7 @@ harbor run \
   -p ./datasets/<dataset-name> \
   -a openhands -m openai/gpt-4o \
   --ae OPENAI_API_KEY=$OPENAI_API_KEY \
-  --ve ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+  --ve CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \
   --env docker
 
 # Remote sandboxes: --env modal / --env daytona / --env e2b / --env runloop

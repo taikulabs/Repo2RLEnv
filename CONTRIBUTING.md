@@ -24,7 +24,7 @@ Python **3.12 / 3.13 / 3.14** are all supported and CI tests against each. The m
 External tools you'll want installed:
 - **`gh` CLI** (`brew install gh` then `gh auth login`) — the canonical GitHub auth path for both `pr_diff` and `pr_runtime`
 - **Docker** — required for any `_runtime` pipeline + the bootstrap phase. Lite pipelines (`pr_diff`) work without it.
-- An **LLM provider key** in your environment — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc. (any [LiteLLM](https://docs.litellm.ai/docs/providers)-supported provider). Bootstrap needs this; pure `pr_diff` runs don't.
+- An **LLM provider key** in your environment — `CLAUDE_CODE_OAUTH_TOKEN` (Claude, via `claude setup-token`), `OPENAI_API_KEY`, etc. (any [LiteLLM](https://docs.litellm.ai/docs/providers)-supported provider). Bootstrap needs this; pure `pr_diff` runs don't.
 
 ## Issues
 

@@ -81,11 +81,11 @@ repo2rlenv generate --repo pallets/click --pipeline pr_runtime \
   --pipeline-opt limit=10 --llm anthropic/claude-sonnet-4-6 --out ./env-click
 
 # 2. run an agent inside the sandbox (swap -a / -m for any of 25+ harnesses)
-export ANTHROPIC_API_KEY=...   OPENAI_API_KEY=...
-harbor run -p ./env-click -a claude-code -m anthropic/claude-sonnet-4-6 --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY --env docker
+export CLAUDE_CODE_OAUTH_TOKEN=...   OPENAI_API_KEY=...
+harbor run -p ./env-click -a claude-code -m anthropic/claude-sonnet-4-6 --ae CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN --env docker
 harbor run -p ./env-click -a openhands   -m openai/gpt-4o               --ae OPENAI_API_KEY=$OPENAI_API_KEY     --env docker
 harbor run -p ./env-click -a codex       -m openai/o3                   --ae OPENAI_API_KEY=$OPENAI_API_KEY     --env docker
-harbor run -p ./env-click -a hermes      -m anthropic/claude-sonnet-4-6 --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY --env docker
+harbor run -p ./env-click -a hermes      -m anthropic/claude-sonnet-4-6 --ae CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN --env docker
 ```
 
 Each agent's per-task reward lands in `/logs/verifier/reward.json`, ready for training or eval.

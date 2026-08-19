@@ -104,6 +104,7 @@ def test_agent_loop_short_circuits_when_cost_budget_hit():
         model = "claude-sonnet-4-6"
         qualified_name = "anthropic/claude-sonnet-4-6"
         api_key_env = None
+        oauth_token_env = None
         endpoint = None
         timeout_sec = 60
 
@@ -146,6 +147,7 @@ def test_agent_loop_respects_max_iterations_with_no_cost_cap():
         model = "claude-sonnet-4-6"
         qualified_name = "anthropic/claude-sonnet-4-6"
         api_key_env = None
+        oauth_token_env = None
         endpoint = None
         timeout_sec = 60
 

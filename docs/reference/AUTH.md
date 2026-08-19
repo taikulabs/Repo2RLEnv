@@ -101,7 +101,7 @@ LiteLLM resolves provider keys from provider-default env vars:
 
 | Provider | Env var |
 |---|---|
-| Anthropic | `ANTHROPIC_API_KEY` |
+| Anthropic | `CLAUDE_CODE_OAUTH_TOKEN` |
 | OpenAI | `OPENAI_API_KEY` |
 | Hugging Face Router | `HF_TOKEN` |
 | Together | `TOGETHER_API_KEY` |

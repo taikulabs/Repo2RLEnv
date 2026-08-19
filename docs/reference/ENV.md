@@ -39,7 +39,7 @@ LiteLLM-resolved; per-provider defaults. Override with `llm.api_key_env` in conf
 
 | Variable | Provider |
 |---|---|
-| `ANTHROPIC_API_KEY` | Anthropic (Claude) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Anthropic (Claude) |
 | `OPENAI_API_KEY` | OpenAI |
 | `HF_TOKEN` | Hugging Face Router |
 | `TOGETHER_API_KEY` | Together |
@@ -73,7 +73,7 @@ The diff-similarity verifier baked into every `pr_diff` task is configurable at 
 | `R2E_W_SIM` | Weight for the *changes-only similarity* component. | wired in source |
 | `R2E_W_JUDGE` | Weight for the *LLM-as-judge* semantic-correctness component. | wired in source |
 | `R2E_JUDGE_MODEL` | Override the judge model (LiteLLM-qualified name). | claude-haiku |
-| `ANTHROPIC_API_KEY` | Required for the LLM-judge component; the verifier degrades gracefully (records `status=no_api_key`) when unset, so the other five components still score. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Required for the LLM-judge component; the verifier degrades gracefully (records `status=no_api_key`) when unset, so the other five components still score. |
 
 ## UI / logging
 

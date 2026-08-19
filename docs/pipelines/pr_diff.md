@@ -180,8 +180,8 @@ harbor run \
   -p ./datasets/click-prdiff \
   -a claude-code -m anthropic/claude-sonnet-4-6 \
   --ak max_budget_usd=2.00 --ak max_turns=30 \
-  --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  --ve ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+  --ae CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \
+  --ve CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \
   --env docker -n 1
 
 # Example 2: same env, different agent — openhands + GPT-4o.
@@ -189,7 +189,7 @@ harbor run \
   -p ./datasets/click-prdiff \
   -a openhands -m openai/gpt-4o \
   --ae OPENAI_API_KEY=$OPENAI_API_KEY \
-  --ve ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+  --ve CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN \
   --env docker -n 1
 
 # Harbor ships 25+ agent harnesses you can swap in here:

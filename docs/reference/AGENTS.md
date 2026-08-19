@@ -102,7 +102,7 @@ class CliFlag:
 @dataclass
 class EnvVar:
     kwarg: str
-    env: str                                              # e.g. "ANTHROPIC_API_KEY"
+    env: str                                              # e.g. "CLAUDE_CODE_OAUTH_TOKEN"
     type: Literal["str", "int", "bool", "enum"]
     # ...
     bool_true: str = "true"
@@ -130,7 +130,7 @@ class ClaudeCode(BaseInstalledAgent):
     ]
 ```
 
-`ANTHROPIC_API_KEY` is resolved by the Claude Code CLI itself; Harbor passes the env through.
+`CLAUDE_CODE_OAUTH_TOKEN` is resolved by the Claude Code CLI itself; Harbor passes the env through.
 
 ### Concrete: what `terminus-2` accepts (RL-targeted)
 
@@ -181,7 +181,7 @@ The two important ones for hosted-LLM scenarios:
 
 | Where the LLM runs | How the agent reaches it |
 |---|---|
-| Cloud API (Anthropic / OpenAI / etc.) | `model_name="anthropic/claude-sonnet-4-6"` + `ANTHROPIC_API_KEY` env. No `api_base`. |
+| Cloud API (Anthropic / OpenAI / etc.) | `model_name="anthropic/claude-sonnet-4-6"` + `CLAUDE_CODE_OAUTH_TOKEN` env. No `api_base`. |
 | Self-hosted vLLM / SGLang on your laptop or tunnel | `model_name="vllm/Qwen3.5-4B"` + `api_base="https://your-tunnel/v1"` + `OPENAI_API_KEY="dummy"` |
 | HF Inference Router (Together / Nscale / Scaleway) | `model_name="huggingface/Qwen/...:together"` + `HF_TOKEN`; LiteLLM auto-points at the router |
 | Bedrock / Vertex / etc. | LiteLLM provider strings + provider-specific env auth |

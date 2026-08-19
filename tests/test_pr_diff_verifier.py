@@ -233,19 +233,21 @@ def test_normalize_changes_only_drops_metadata_and_context() -> None:
 
 
 def test_llm_judge_no_api_key_returns_none() -> None:
-    score, status = llm_judge(instruction="i", oracle="o", predicted="p", api_key="")
+    score, status = llm_judge(instruction="i", oracle="o", predicted="p", oauth_token="")
     assert score is None
     assert status == "no_api_key"
 
 
 def test_llm_judge_empty_predicted_returns_zero() -> None:
-    score, status = llm_judge(instruction="i", oracle="o", predicted="", api_key="key")
+    score, status = llm_judge(
+        instruction="i", oracle="o", predicted="", oauth_token="key"
+    )
     assert score == 0.0
     assert status == "empty_predicted"
 
 
 def test_llm_judge_happy_path() -> None:
-    """Mock the API to return a well-formed score."""
+    """Mock the API to return a well-formed score and carry OAuth headers."""
     fake_response = (
         b'{"content": [{"text": "{\\"score\\": 0.73, '
         b'\\"reasoning\\": \\"plausible fix in right region\\"}"}]}'
@@ -257,10 +259,16 @@ def test_llm_judge_happy_path() -> None:
             instruction="fix the bug",
             oracle="diff --git a/x b/x\n",
             predicted="diff --git a/x b/x\n+fix\n",
-            api_key="sk-test",
+            oauth_token="sk-ant-oat01-test",
         )
     assert score == pytest.approx(0.73)
     assert status == "ok"
+
+    req = m.call_args.args[0]
+    auth = req.get_header("Authorization")
+    assert auth is not None and auth.startswith("Bearer ")
+    assert req.get_header("Anthropic-beta") == "oauth-2025-04-20"
+    assert req.get_header("X-api-key") is None
 
 
 def test_llm_judge_network_error_returns_none() -> None:
@@ -270,7 +278,9 @@ def test_llm_judge_network_error_returns_none() -> None:
         "urllib.request.urlopen",
         side_effect=urllib.error.URLError("connection refused"),
     ):
-        score, status = llm_judge(instruction="i", oracle="o", predicted="p", api_key="sk-test")
+        score, status = llm_judge(
+            instruction="i", oracle="o", predicted="p", oauth_token="sk-test"
+        )
     assert score is None
     assert status == "network"
 
@@ -281,7 +291,9 @@ def test_llm_judge_parse_error_returns_none() -> None:
 
     with mock.patch("urllib.request.urlopen") as m:
         m.return_value.__enter__.return_value.read.return_value = fake_response
-        score, status = llm_judge(instruction="i", oracle="o", predicted="p", api_key="sk-test")
+        score, status = llm_judge(
+            instruction="i", oracle="o", predicted="p", oauth_token="sk-test"
+        )
     assert score is None
     assert status == "missing_score"
 
@@ -291,7 +303,9 @@ def test_llm_judge_clamps_out_of_range_score() -> None:
     fake_response = b'{"content": [{"text": "{\\"score\\": 1.5, \\"reasoning\\": \\"x\\"}"}]}'
     with mock.patch("urllib.request.urlopen") as m:
         m.return_value.__enter__.return_value.read.return_value = fake_response
-        score, status = llm_judge(instruction="i", oracle="o", predicted="p", api_key="sk-test")
+        score, status = llm_judge(
+            instruction="i", oracle="o", predicted="p", oauth_token="sk-test"
+        )
     assert score == 1.0
     assert status == "ok"
 

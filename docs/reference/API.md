@@ -52,6 +52,7 @@ from repo2rlenv.auth import (
     resolve_github_token,
     resolve_hf_token,
     resolve_llm_api_key,
+    resolve_claude_oauth_token,
     auth_clone_url,
 )
 ```

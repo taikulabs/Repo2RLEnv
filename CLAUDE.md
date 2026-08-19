@@ -125,7 +125,7 @@ Logging is routed through `RichHandler` via `install_logging()` (called from `cl
 3. `$GITHUB_TOKEN`
 4. None (anonymous; fails for private repos)
 
-HF Hub auth is the `huggingface_hub` library's auto-resolution (`~/.cache/huggingface/token` or `$HF_TOKEN`). LLM keys via provider-default env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...) — see `auth.resolve_llm_api_key()`.
+HF Hub auth is the `huggingface_hub` library's auto-resolution (`~/.cache/huggingface/token` or `$HF_TOKEN`). Anthropic/Claude auth uses a Claude Code OAuth token via `auth.resolve_claude_oauth_token()` reading `CLAUDE_CODE_OAUTH_TOKEN`. Other providers' LLM keys via provider-default env vars (`OPENAI_API_KEY`, ...) — see `auth.resolve_llm_api_key()`.
 
 Registry push creds (for `_runtime` image distribution) resolve from explicit env vars first: GHCR reads `GHCR_TOKEN`/`GITHUB_TOKEN` (needs `gh auth refresh -h github.com -s write:packages` one-time); Docker Hub reads `DOCKER_USERNAME`+`DOCKER_TOKEN` (PAT — preferred over the credstore's pull-only OAuth token), and pushes under the Docker Hub *user's* namespace. Multi-repo datasets push one image per repo + rewrite each task to its own digest. See `docs/reference/REGISTRY_AUTH.md`.
 
