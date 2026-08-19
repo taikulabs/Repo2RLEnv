@@ -16,7 +16,6 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 
 from rich.console import Group, RenderableType
 from rich.padding import Padding
@@ -28,27 +27,11 @@ from rich.text import Text
 from repo2rlenv.bootstrap.agent import AgentAction, AgentTurn
 from repo2rlenv.ui.console import should_use_rich
 from repo2rlenv.ui.live import live_view
+from repo2rlenv.ui.phases import PHASE_GLYPH as _PHASE_GLYPH
+from repo2rlenv.ui.phases import PHASES as _PHASES
+from repo2rlenv.ui.phases import PhaseState
 from repo2rlenv.ui.primitives import error_panel, success_panel
 from repo2rlenv.ui.theme import ACTION_STYLE_MAP, GLYPH, STYLE
-
-_PHASES = ["clone", "pull", "sandbox", "agent", "commit", "push"]
-_PHASE_GLYPH = {
-    "clone": GLYPH.PHASE_CLONE,
-    "pull": GLYPH.PHASE_PULL,
-    "sandbox": GLYPH.PHASE_SANDBOX,
-    "agent": GLYPH.PHASE_AGENT,
-    "commit": GLYPH.PHASE_COMMIT,
-    "push": GLYPH.PHASE_PUSH,
-}
-
-
-@dataclass
-class PhaseState:
-    name: str
-    status: str = "pending"  # pending | running | done | skipped | failed
-    detail: str = ""
-    started_at: float = 0.0
-    duration_sec: float = 0.0
 
 
 class BootstrapView:
